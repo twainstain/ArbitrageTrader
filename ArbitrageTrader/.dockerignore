@@ -1,0 +1,15 @@
+.git
+.github
+.claude
+.env
+__pycache__
+*.pyc
+data/
+logs/
+docs/
+tests/
+claude_session/
+*.egg-info
+.pytest_cache
+certbot/
+monitoring/grafana/data/

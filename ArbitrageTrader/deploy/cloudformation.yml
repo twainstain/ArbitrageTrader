@@ -1,0 +1,196 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "Arbitrage Trader — EC2 spot instance with Docker"
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: SSH key pair for EC2 access
+
+  AllowedSSHCidr:
+    Type: String
+    Default: "0.0.0.0/0"
+    Description: CIDR block allowed for SSH (restrict to your IP for security)
+
+  InstanceType:
+    Type: String
+    Default: t3.small
+    AllowedValues: [t3.micro, t3.small, t3.medium]
+    Description: EC2 instance type
+
+  UseSpot:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Use spot instance pricing (~70% cheaper, small interruption risk)
+
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/22.04/stable/current/amd64/hvm/ebs-gp2/ami-id
+    Description: Ubuntu 22.04 AMI (auto-resolved via SSM)
+
+  ECRRepoName:
+    Type: String
+    Default: arb-trader
+    Description: ECR repository name for Docker images
+
+Conditions:
+  IsSpot: !Equals [!Ref UseSpot, "true"]
+
+Resources:
+  # --- ECR Repository ---
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref ECRRepoName
+      ImageScanningConfiguration:
+        ScanOnPush: false
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep last 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": { "type": "expire" }
+              }
+            ]
+          }
+
+  # --- Security Group ---
+  TraderSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Arbitrage Trader - SSH + HTTPS + HTTP
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AllowedSSHCidr
+          Description: SSH
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP (certbot redirect)
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: HTTPS (API + Grafana)
+      Tags:
+        - Key: Name
+          Value: arb-trader-sg
+
+  # --- IAM Role (ECR pull + CloudWatch) ---
+  TraderInstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: arb-trader-ec2-role
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: ECRPullPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: "*"
+
+  TraderInstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref TraderInstanceRole
+
+  # --- Launch Template (supports spot pricing) ---
+  TraderLaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: arb-trader-lt
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceType
+        ImageId: !Ref AmiId
+        KeyName: !Ref KeyPairName
+        IamInstanceProfile:
+          Arn: !GetAtt TraderInstanceProfile.Arn
+        SecurityGroupIds:
+          - !GetAtt TraderSecurityGroup.GroupId
+        InstanceMarketOptions: !If
+          - IsSpot
+          - MarketType: spot
+            SpotOptions:
+              SpotInstanceType: persistent
+              InstanceInterruptionBehavior: stop
+          - !Ref AWS::NoValue
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: 20
+              VolumeType: gp3
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -ex
+            apt-get update
+            apt-get install -y docker.io docker-compose-v2 awscli certbot
+            systemctl enable docker
+            systemctl start docker
+            usermod -aG docker ubuntu
+            mkdir -p /opt/arb-trader
+            chown ubuntu:ubuntu /opt/arb-trader
+
+  # --- EC2 Instance (from launch template) ---
+  TraderInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref TraderLaunchTemplate
+        Version: !GetAtt TraderLaunchTemplate.LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: arb-trader
+
+  # --- Elastic IP ---
+  TraderEIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      InstanceId: !Ref TraderInstance
+      Tags:
+        - Key: Name
+          Value: arb-trader-eip
+
+Outputs:
+  PublicIP:
+    Description: Elastic IP for the trader instance
+    Value: !Ref TraderEIP
+
+  InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref TraderInstance
+
+  ECRRepositoryUri:
+    Description: ECR repository URI for docker push
+    Value: !GetAtt ECRRepository.RepositoryUri
+
+  SSHCommand:
+    Description: SSH command to connect
+    Value: !Sub "ssh -i ${KeyPairName}.pem ubuntu@${TraderEIP}"
+
+  SecurityGroupId:
+    Description: Security group ID
+    Value: !Ref TraderSecurityGroup

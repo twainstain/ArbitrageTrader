@@ -2,41 +2,42 @@
 
 ## Session: 2026-04-13
 
-### Summary
+### What Was Done
 
-Production-grade DEX arbitrage trading system. 422 tests. 6 EVM chains live.
+Completed Phase 4 production hardening + dashboard + deployment infrastructure. 436 tests pass.
 
-### Live On-Chain Scanning — 6 Chains
+**New this round:**
 
-| Chain | DEXs | Status |
-|---|---|---|
-| Ethereum | Uniswap V3 + SushiSwap V3 | Working |
-| Arbitrum | Uniswap V3 + SushiSwap V3 | Working |
-| Base | Uniswap V3 + SushiSwap V3 | Working |
-| Polygon | Uniswap V3 (Sushi filtered) | Working |
-| Optimism | Uniswap V3 + SushiSwap V3 | Working — best spreads (~11%) |
-| Avalanche | Uniswap V3 (Sushi not deployed) | Working |
+| Module | What | Tests |
+|--------|------|-------|
+| src/bot.py | AlertDispatcher wired: opportunity_found, trade_executed, system_error, daily_summary | 7 |
+| src/pipeline/lifecycle.py | Dispatcher wired: simulation_failed, trade_reverted, trade_not_included | 7 |
+| src/run_live_with_dashboard.py | Full backend init (Telegram+Discord+Gmail), graceful shutdown | -- |
+| src/main.py | SIGTERM/SIGINT signal handlers | -- |
+| src/api/dashboard.py | API_BASE auto-detection for CloudFront path routing | -- |
+| pyproject.toml | All dependencies declared (web3, requests, fastapi, uvicorn, psycopg2, dotenv) | -- |
+| Dockerfile | Multi-stage Python 3.11-slim, health check | -- |
+| docker-compose.yml | 6 services: bot, prometheus, grafana, loki, promtail, nginx | -- |
+| monitoring/ | 7 config files: prometheus, loki, promtail, nginx, grafana provisioning | -- |
+| docs/deployment.md | Full 1046-line deployment guide | -- |
 
-### Architecture Modules
+### Architecture — Fully Implemented
 
-| Module | Status |
-|---|---|
-| On-chain quoters (multi-fee-tier, per-chain) | Done |
-| Persistence (SQLite + Postgres) | Done |
-| Risk engine (9 rules + circuit breaker) | Done |
-| Candidate pipeline (6-stage lifecycle) | Done |
-| API control plane (FastAPI + auth) | Done |
-| Dashboard (HTML, chain filter, bar chart, detail pages) | Done |
-| Alerting (Telegram >5%, Discord, Gmail hourly) | Done |
-| RPC failover (3 backup endpoints per chain) | Done |
-| Pair discovery (DexScreener volume ranking) | Done |
-| Outlier filter, Decimal math, Flashbots | Done |
+All Phase 1-4 items complete. Phase 5 (triangular arb, mempool, backrun) intentionally deferred.
 
-### Not Yet Working
+### Deployment Status
 
-- BSC: needs WBNB/USDT pair (not WETH/USDC)
-- Mantle: no Uniswap V3 deployment
-- Polygon Sushi: returns $0.74 (filtered by sanity check)
-- Avalanche Sushi: quoter address not deployed
+| Item | Status |
+|------|--------|
+| Dependencies (pyproject.toml) | DONE |
+| Graceful shutdown (SIGTERM) | DONE |
+| Dockerfile | DONE |
+| docker-compose.yml (6 services) | DONE |
+| Monitoring configs (7 files) | DONE |
+| Alert wiring (bot + pipeline + live runner) | DONE |
+| Dashboard path routing (CloudFront) | DONE |
+| GitHub Actions CI/CD | TODO |
+| CloudFormation template | TODO |
+| spot-monitor.sh | TODO |
 
-### Test Count: 422
+### Test Count: 436
