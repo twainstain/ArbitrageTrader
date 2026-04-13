@@ -99,6 +99,8 @@ class ArbitrageStrategy:
         sell_proceeds_after_fee = _apply_fee(sell_proceeds_quote, sell_quote.fee_bps)
 
         # Use liquidity-aware slippage when pool data is available.
+        # We use min(buy, sell) liquidity as the bottleneck — the thinnest pool
+        # determines the worst-case slippage for the entire trade.
         min_liq = min(buy_quote.liquidity_usd, sell_quote.liquidity_usd)
         if min_liq > ZERO:
             effective_slippage_bps = _dynamic_slippage_bps(
@@ -119,6 +121,8 @@ class ArbitrageStrategy:
 
         # Convert quote-denominated profit to base asset using the average of the
         # two prices as a rough conversion rate, then subtract gas cost in base.
+        # NOTE: Mid-price averaging is a simplification. In production with large
+        # trades, use the actual execution price from the quoter instead.
         mid_price = (buy_quote.buy_price + sell_quote.sell_price) / D("2")
         net_profit_base = (net_profit_quote / mid_price) - self.config.estimated_gas_cost_base
 
@@ -136,6 +140,11 @@ class ArbitrageStrategy:
         dex_fee_cost_quote = (buy_cost_with_fee - buy_cost_quote) + (sell_proceeds_quote - sell_proceeds_after_fee)
 
         # --- Risk flag assessment (per scanner doc warning flags) ---
+        # Thresholds are empirically derived from DeFi market conditions:
+        #   $100K = pools below this have frequent large price impact
+        #   $50K  = 24h volume below this means the pair is barely traded
+        #   60s   = quotes older than 1 minute may not reflect current state
+        #   80%   = if fees eat >80% of the gross spread, the edge is too thin
         flags: list[str] = []
 
         min_liq = min(buy_quote.liquidity_usd, sell_quote.liquidity_usd)
@@ -157,10 +166,11 @@ class ArbitrageStrategy:
             flags.append("high_fee_ratio")
 
         # Liquidity score: 0.0 (illiquid) to 1.0 (highly liquid).
-        # Based on the lower of buy/sell venue liquidity, scaled logarithmically.
+        # Log10 scaling maps the typical DeFi liquidity range to [0, 1]:
+        #   $10M+ → 1.0, $1M → ~0.86, $100K → ~0.71, $10K → ~0.57
+        # Divisor 7.0 = log10(10,000,000) — pools with $10M+ TVL saturate at 1.0.
         # This is a ranking metric (not financial), so float is acceptable.
         if min_liq > ZERO:
-            # $10M+ → 1.0, $100K → ~0.5, $10K → ~0.25
             liquidity_score = min(1.0, math.log10(max(float(min_liq), 1)) / 7.0)
         else:
             # No liquidity data available — default to 1.0 (no penalty).

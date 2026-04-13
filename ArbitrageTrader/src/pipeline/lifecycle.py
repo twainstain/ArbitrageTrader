@@ -77,6 +77,12 @@ class CandidatePipeline:
     def process(self, opportunity: Opportunity) -> PipelineResult:
         """Run a single opportunity through the full pipeline.
 
+        DESIGN DECISION: Each stage persists before proceeding to the next.
+        This ensures full auditability — reviewers can see exactly where and
+        why a trade was rejected (risk filter? simulation fail? revert?).
+        The pipeline stops on any failure because downstream stages depend
+        on upstream success (e.g., can't simulate without valid pricing).
+
         Stages:
           1. Detect & persist
           2. Price & persist

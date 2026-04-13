@@ -75,7 +75,12 @@ class OnChainMarketError(Exception):
 
 
 def _validate_price(price: Decimal, dex: str, chain: str) -> Decimal:
-    """Reject quotes that are obviously wrong (illiquid pool / wrong fee tier)."""
+    """Reject quotes that are obviously wrong (illiquid pool / wrong fee tier).
+
+    Bounds [$100, $100K] for WETH/USDC cover all reasonable market conditions.
+    Catches: Sushi returning $39 (wrong fee tier), PancakeSwap BSC returning
+    $2 trillion (WETH decimal mismatch on BSC), pools with dust liquidity.
+    """
     if price < MIN_SANE_PRICE:
         raise OnChainMarketError(
             f"{dex} on {chain} returned ${float(price):.2f} — below minimum ${float(MIN_SANE_PRICE)}"
@@ -138,7 +143,11 @@ class OnChainMarket:
                 self._w3[chain] = Web3(Web3.HTTPProvider(urls[0]))
 
     def _rotate_rpc(self, chain: str) -> None:
-        """Rotate to the next RPC endpoint for a chain after a failure."""
+        """Rotate to the next RPC endpoint for a chain after a failure.
+
+        Uses round-robin (not random) to ensure even distribution across
+        endpoints. If all RPCs fail, wraps back to index 0 (primary).
+        """
         urls = self._rpc_urls.get(chain, [])
         if len(urls) <= 1:
             return
@@ -185,7 +194,9 @@ class OnChainMarket:
                     return self._quote_quickswap_v3(chain, base_addr, quote_addr)
                 raise OnChainMarketError(f"Unknown dex_type: {dex_type}")
 
-            # Try once, on RPC failure rotate and retry once.
+            # Try once, on RPC failure rotate to next endpoint and retry once.
+            # Single retry balances speed vs resilience: catches transient RPC
+            # issues without adding latency for persistent failures (chain down).
             try:
                 mid = _do_quote()
             except OnChainMarketError:
@@ -196,6 +207,9 @@ class OnChainMarket:
 
             mid = _validate_price(mid, dex.name, chain)  # type: ignore[union-attr]
 
+            # Model bid-ask spread as symmetric around mid: buy = mid + half, sell = mid - half.
+            # The DEX fee tier approximates the full spread (market maker compensation).
+            # In reality buy/sell may differ, but symmetric is acceptable for arb detection.
             half_spread = mid * (dex.fee_bps / BPS_DIVISOR / TWO)  # type: ignore[union-attr]
             return MarketQuote(
                 dex=dex.name,  # type: ignore[union-attr]
@@ -233,8 +247,12 @@ class OnChainMarket:
     ) -> Decimal:
         """Get WETH/USDC mid-price from Uniswap V3 QuoterV2.
 
-        Tries all standard fee tiers (100, 500, 3000, 10000) and returns
-        the best quote. Different chains have liquidity in different tiers.
+        Tries all standard Uniswap V3 fee tiers and returns the best quote
+        (highest output = deepest liquidity pool for this pair).
+
+        Fee tiers: 100 (0.01%), 500 (0.05%), 3000 (0.30%), 10000 (1.00%).
+        Liquidity varies by chain: Ethereum majors concentrate in 500 bps,
+        Polygon in 500, Arbitrum in 3000. We try all and pick the best.
         """
         w3 = self._w3[chain]
         quoter_addr = UNISWAP_V3_QUOTER_PER_CHAIN.get(chain, UNISWAP_V3_QUOTER_V2)

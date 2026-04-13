@@ -53,6 +53,12 @@ class ArbitrageBot:
         # Pairs to scan — passed directly (e.g. from pair_scanner discovery)
         # or falls back to config's primary pair + extra_pairs.
         self._pairs = pairs
+        self._shutdown_requested = False
+
+    def request_shutdown(self) -> None:
+        """Signal the bot to stop after the current iteration completes."""
+        self._shutdown_requested = True
+        logger.info("Shutdown requested — will stop after current iteration")
 
     def _build_pair_list(self) -> list[PairConfig]:
         """Build the list of pairs to scan each cycle.
@@ -77,6 +83,11 @@ class ArbitrageBot:
     @staticmethod
     def _filter_outliers(quotes: list[MarketQuote], max_deviation: Decimal = D("0.5")) -> list[MarketQuote]:
         """Remove quotes whose mid-price deviates more than max_deviation from the pair median.
+
+        Uses median (not mean) because median is robust to outliers — one garbage
+        quote won't skew the reference price. 50% threshold catches data errors like
+        Sushi returning $115 for WETH when others show $2200 (95% deviation).
+        Per-pair filtering ensures bad data on one pair doesn't affect others.
 
         This catches bad data from low-liquidity pools (e.g. a pool returning $39
         for WETH when others show ~$2200).
@@ -122,6 +133,10 @@ class ArbitrageBot:
         logger.info("Scanning %d pair(s): %s", len(all_pairs), ", ".join(pair_names))
 
         for index in range(1, iterations + 1):
+            if self._shutdown_requested:
+                logger.info("Shutdown requested — stopping before scan %d", index)
+                break
+
             total_scans += 1
             try:
                 quotes = self.market.get_quotes()

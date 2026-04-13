@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import signal
 
 from bot import ArbitrageBot
 from config import BotConfig
@@ -185,6 +186,15 @@ def main() -> None:
         logger.info("[executor] PAPER — simulated execution")
 
     bot = ArbitrageBot(config, market=market, executor=executor, pairs=discovered_pairs)
+
+    def _handle_shutdown(signum, frame):
+        sig_name = signal.Signals(signum).name
+        logger.info("Received %s — requesting graceful shutdown", sig_name)
+        bot.request_shutdown()
+
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+    signal.signal(signal.SIGINT, _handle_shutdown)
+
     bot.run(iterations=iterations, sleep=not no_sleep, dry_run=dry_run)
 
 

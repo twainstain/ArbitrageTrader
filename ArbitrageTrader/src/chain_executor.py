@@ -166,6 +166,10 @@ class ChainExecutor:
     def execute(self, opportunity: Opportunity) -> ExecutionResult:
         """Simulate, then send the on-chain arbitrage transaction.
 
+        CRITICAL: Always simulate before real execution. eth_call is free and
+        catches reverts (profit below min, bad routes, approval issues) before
+        spending real gas. This saves ~$5-50 per avoided failed transaction.
+
         Flow:
           1. Build the transaction
           2. Simulate via eth_call (dry-run on-chain) — if it reverts, skip
@@ -288,6 +292,9 @@ class ChainExecutor:
         nonce = self.w3.eth.get_transaction_count(self.account.address)
 
         # Dynamic gas estimation with 20% safety buffer.
+        # 1.2x accounts for gas variance between estimation and execution
+        # (other txs in same block can change storage costs).
+        # 500K fallback is empirically safe for flash arb (swaps + repay ≈ 300-400K).
         try:
             estimated_gas = call_data.estimate_gas({"from": self.account.address})
             gas_limit = int(estimated_gas * 1.2)
@@ -307,6 +314,12 @@ class ChainExecutor:
 
     def _estimate_gas_fees(self) -> tuple[int, int]:
         """Estimate EIP-1559 gas fees from recent block history.
+
+        Formula: maxFeePerGas = 2 * baseFee + priorityFee
+        Why 2x baseFee: provides headroom if baseFee increases next block
+        (Ethereum baseFee can increase up to 12.5% per block).
+        Why median tips: 50th percentile avoids overpaying while still being
+        competitive for inclusion.
 
         Returns (maxFeePerGas, maxPriorityFeePerGas) in wei.
         Uses eth_feeHistory to get the recent base fee and priority fee
@@ -362,10 +375,16 @@ class ChainExecutor:
         Flashbots bundles are sent to a private relay and are not visible
         in the public mempool, preventing front-running and sandwich attacks.
 
-        The bundle targets the next block.  If not included, it expires
-        harmlessly (no gas cost for failed inclusion).
+        The bundle targets the next block (~12s on Ethereum). If not included,
+        it expires harmlessly (no gas cost for failed inclusion). This is the key
+        advantage over public mempool: failed Flashbots bundles cost nothing.
+
+        Falls back to public mempool if Flashbots relay is unreachable — this
+        exposes to MEV but ensures the trade still lands if relay is down.
         """
         raw_tx = signed_tx.rawTransaction.hex()  # type: ignore[union-attr]
+        # Target next block for maximum inclusion probability.
+        # Older blocks are more likely to miss due to changing prices/conditions.
         target_block = self.w3.eth.block_number + 1
 
         # Flashbots eth_sendBundle JSON-RPC.

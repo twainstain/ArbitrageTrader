@@ -74,7 +74,17 @@ class RiskPolicy:
     ) -> RiskVerdict:
         """Evaluate an opportunity against all risk rules.
 
+        Rule evaluation order matters:
+          1. Kill switch — highest authority, checked first
+          2. Min profit  — non-negotiable floor (if not profitable, skip everything)
+          3. Warning flags — hard veto on compounding risk
+          4. Liquidity score — pool quality check
+          5. Gas-to-profit ratio — economics check
+          6. Rate limiting — velocity control
+          7. Exposure limit — position sizing
+
         Returns RiskVerdict with approved=True only if ALL rules pass.
+        Analysis dict is populated even on rejection for dashboard visibility.
         """
         # Build analysis details for every verdict (approved or rejected).
         analysis = {

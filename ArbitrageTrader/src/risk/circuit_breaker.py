@@ -24,9 +24,16 @@ logger = logging.getLogger(__name__)
 
 
 class BreakerState(str, Enum):
-    CLOSED = "closed"       # normal operation
-    OPEN = "open"           # tripped — execution paused
-    HALF_OPEN = "half_open" # cooldown expired — allow one probe
+    """State machine: CLOSED → OPEN → HALF_OPEN → CLOSED.
+
+    CLOSED:    Normal operation, all events monitored.
+    OPEN:      Tripped by reverts/stale/RPC errors. Execution blocked.
+    HALF_OPEN: Cooldown expired. One probe trade allowed. If it succeeds
+               → CLOSED (recovered). If it fails → back to OPEN.
+    """
+    CLOSED = "closed"
+    OPEN = "open"
+    HALF_OPEN = "half_open"
 
 
 @dataclass
@@ -67,10 +74,14 @@ class CircuitBreaker:
         self._tripped_at: float = 0
         self._last_fresh_quote_at: float = time.time()
 
-        # Sliding window event deques: (timestamp,)
+        # Sliding window event deques using deque for O(1) append/popleft.
+        # Timestamps enable time-based windowing: old events are pruned automatically
+        # so the breaker doesn't trip from stale history.
         self._reverts: deque[float] = deque()
         self._rpc_errors: deque[float] = deque()
-        self._block_trades: deque[tuple[int, float]] = deque()  # (block_number, timestamp)
+        # Block trades use (block_number, timestamp) — block-based limit prevents
+        # execution clustering (time-based would allow bunching during high activity).
+        self._block_trades: deque[tuple[int, float]] = deque()
 
     @property
     def state(self) -> BreakerState:
@@ -173,7 +184,9 @@ class CircuitBreaker:
         """Check and possibly transition state (must hold lock)."""
         now = time.time()
 
-        # Check stale data (even when closed).
+        # Stale check ALWAYS runs (even when CLOSED) because no fresh quote
+        # is a hard fault — RPC may be down or market data frozen. We should
+        # not trade on potentially stale prices regardless of other conditions.
         if self._state == BreakerState.CLOSED:
             stale_duration = now - self._last_fresh_quote_at
             if stale_duration > self.config.max_stale_seconds:

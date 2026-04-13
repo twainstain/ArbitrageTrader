@@ -12,6 +12,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import signal
 import threading
 import time
 
@@ -126,6 +127,19 @@ def main() -> None:
     dashboard_thread.start()
     logger.info("Dashboard running at http://localhost:%d/dashboard", args.port)
 
+    # --- Graceful shutdown ---
+    shutdown_requested = False
+
+    def _handle_shutdown(signum, frame):
+        nonlocal shutdown_requested
+        sig_name = signal.Signals(signum).name
+        logger.info("Received %s — draining current scan then stopping", sig_name)
+        shutdown_requested = True
+        alerter.stop()
+
+    signal.signal(signal.SIGTERM, _handle_shutdown)
+    signal.signal(signal.SIGINT, _handle_shutdown)
+
     # --- Bot ---
     config_path = args.config
     if config_path is None:
@@ -150,6 +164,10 @@ def main() -> None:
                 ", ".join(p.pair for p in (config.extra_pairs or [])))
 
     for i in range(1, args.iterations + 1):
+        if shutdown_requested:
+            logger.info("Shutdown requested — stopping before scan %d", i)
+            break
+
         logger.info("--- Scan %d/%d ---", i, args.iterations)
         metrics.record_opportunity_detected()  # track scan count
 
@@ -308,14 +326,18 @@ def main() -> None:
         if i < args.iterations:
             time.sleep(args.sleep)
 
-    logger.info("Done. Dashboard remains active — press Ctrl+C to exit.")
+    alerter.stop()
+    logger.info("Scanning complete. Dashboard remains active — send SIGTERM or Ctrl+C to exit.")
     logger.info("View at http://localhost:%d/dashboard", args.port)
 
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("Shutting down.")
+    if not shutdown_requested:
+        try:
+            while not shutdown_requested:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            pass
+
+    logger.info("Shutting down gracefully.")
 
 
 if __name__ == "__main__":

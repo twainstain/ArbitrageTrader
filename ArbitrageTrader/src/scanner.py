@@ -122,11 +122,15 @@ class OpportunityScanner:
     def _composite_score(self, opp: Opportunity) -> float:
         """Compute a multi-factor ranking score.
 
-        Factors (per scanner doc):
-          - net profit (primary, weighted 0.5)
-          - liquidity score (weighted 0.25)
-          - absence of warning flags (weighted 0.15)
-          - spread quality (weighted 0.10)
+        Weights rationale:
+          - 0.50 net profit: primary signal — we're here to make money
+          - 0.25 liquidity:  second most important — illiquid pools give false signals
+          - 0.15 flag safety: penalize stale/risky opportunities
+          - 0.10 spread:     tie-breaker — wider raw spread = more room for error
+
+        Normalization caps:
+          - Profit capped at 1.0 WETH (~$2300) — prevents one outlier from dominating
+          - Spread capped at 5% — above this, likely a data error or illiquid pool
 
         Returns float — this is a ranking metric, not a financial value.
         """
@@ -134,16 +138,12 @@ class OpportunityScanner:
         net_profit = float(opp.net_profit_base)
         spread_pct = float(opp.gross_spread_pct)
 
-        # Normalize net profit to a 0-1 scale (cap at 1.0 WETH).
         profit_score = min(net_profit / 1.0, 1.0) if net_profit > 0 else 0.0
-
-        # Liquidity score is already 0-1 float.
         liq_score = opp.liquidity_score
 
-        # Flag penalty: 1.0 if no flags, decays with more flags.
+        # Each warning flag reduces score by 0.25 — 4 flags = zero score.
         flag_score = max(0.0, 1.0 - len(opp.warning_flags) * 0.25)
 
-        # Spread quality: gross_spread_pct capped at 5%.
         spread_score = min(spread_pct / 5.0, 1.0)
 
         return (
@@ -154,7 +154,12 @@ class OpportunityScanner:
         )
 
     def _passes_alert_filter(self, opp: Opportunity) -> bool:
-        """Return True if the opportunity should be surfaced (not rejected)."""
+        """Return True if the opportunity should be surfaced (not rejected).
+
+        This is a hard veto — separate from composite scoring — because multiple
+        warning flags (e.g., stale + low liquidity) create compounding risk that
+        a weighted score can't adequately capture. Better to reject outright.
+        """
         if opp.net_profit_base < self.alert_min_net_profit:
             return False
         if len(opp.warning_flags) > self.alert_max_warning_flags:
