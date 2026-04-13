@@ -118,7 +118,7 @@ def main() -> None:
     # --- Risk policy (dry-run: execution disabled) ---
     risk_policy = RiskPolicy(
         execution_enabled=False,  # dry-run: detect + price + risk, don't execute
-        min_net_profit=0,  # capture all opportunities for dashboard visibility
+        min_net_profit=0.0005,  # low for testing (~$1). Production: 0.005 (~$10)
     )
 
     # --- Pipeline (dispatcher wired after alerting init below) ---

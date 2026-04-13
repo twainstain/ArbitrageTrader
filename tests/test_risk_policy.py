@@ -87,8 +87,8 @@ class LiquidityScoreTests(unittest.TestCase):
 class GasProfitRatioTests(unittest.TestCase):
     def test_gas_too_expensive_rejected(self) -> None:
         policy = RiskPolicy(execution_enabled=True, max_gas_profit_ratio=D("0.3"))
-        # gas 0.002 / profit 0.003 = 0.67 > 0.3
-        opp = _make_opp(net_profit_base=D("0.003"), gas_cost_base=D("0.002"))
+        # gas 0.004 / profit 0.006 = 0.67 > 0.3 (profit above min_net_profit 0.005)
+        opp = _make_opp(net_profit_base=D("0.006"), gas_cost_base=D("0.004"))
         verdict = policy.evaluate(opp)
         self.assertFalse(verdict.approved)
         self.assertEqual(verdict.reason, "gas_too_expensive")

@@ -36,8 +36,9 @@ class RiskPolicy:
 
     Each rule is a threshold. An opportunity must pass ALL rules to be approved.
     """
-    # Minimum net profit in base asset (e.g. 0.001 WETH)
-    min_net_profit: Decimal = D("0.001")
+    # Minimum net profit in base asset.
+    # Production: 0.005 WETH (~$10). Testing: 0.0005 (~$1).
+    min_net_profit: Decimal = D("0.005")
 
     # Maximum allowed slippage in bps
     max_slippage_bps: Decimal = D("50")

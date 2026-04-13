@@ -371,7 +371,7 @@ def main() -> None:
     # --- Risk ---
     risk_policy = RiskPolicy(
         execution_enabled=False,  # dry-run by default
-        min_net_profit=0,         # capture all for dashboard visibility
+        min_net_profit=0.0005,    # low for testing (~$1). Production: 0.005 (~$10)
     )
     breaker = CircuitBreaker(CircuitBreakerConfig(
         max_reverts=3, revert_window_seconds=300,
