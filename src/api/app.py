@@ -214,7 +214,10 @@ def create_app(
     def opportunity_detail_page(opp_id: str):
         """HTML detail page for a single opportunity."""
         from api.dashboard import OPPORTUNITY_DETAIL_HTML
-        return HTMLResponse(content=OPPORTUNITY_DETAIL_HTML)
+        return HTMLResponse(
+            content=OPPORTUNITY_DETAIL_HTML,
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     # --- Aggregations ---
 
