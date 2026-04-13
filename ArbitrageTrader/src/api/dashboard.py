@@ -233,14 +233,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         else data.sort((a,b) => b.total - a.total);
 
         const tbody = document.querySelector('#chain-table tbody');
-        tbody.innerHTML = data.map(c => `
+        tbody.innerHTML = data.map(c => {
+            const approved = (c.funnel.approved||0) + (c.funnel.included||0) + (c.funnel.dry_run||0);
+            const rejected = c.funnel.rejected || 0;
+            return `
             <tr>
-                <td>${c.chain}</td>
+                <td><b>${c.chain}</b></td>
                 <td>${c.total}</td>
-                <td style="color:#3fb950">${c.funnel.approved || c.funnel.included || c.funnel.dry_run || 0}</td>
-                <td style="color:#f85149">${c.funnel.rejected || 0}</td>
-            </tr>
-        `).join('');
+                <td style="color:#3fb950">${approved}</td>
+                <td style="color:#f85149">${rejected}</td>
+            </tr>`;
+        }).join('');
     }
 
     function sortChains(field) { chainSortField = field; renderChains(); }
