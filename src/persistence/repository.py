@@ -79,15 +79,15 @@ class Repository:
         """Count opportunities since a timestamp, optionally filtered by status."""
         if status:
             row = self.conn.execute(
-                "SELECT COUNT(*) FROM opportunities WHERE detected_at >= ? AND status = ?",
+                "SELECT COUNT(*) as cnt FROM opportunities WHERE detected_at >= ? AND status = ?",
                 (since_iso, status),
             ).fetchone()
         else:
             row = self.conn.execute(
-                "SELECT COUNT(*) FROM opportunities WHERE detected_at >= ?",
+                "SELECT COUNT(*) as cnt FROM opportunities WHERE detected_at >= ?",
                 (since_iso,),
             ).fetchone()
-        return row[0] if row else 0
+        return row["cnt"] if row else 0
 
     # ------------------------------------------------------------------
     # Pricing Results
@@ -268,7 +268,7 @@ class Repository:
             "SELECT value FROM system_checkpoints WHERE checkpoint_type = ?",
             (checkpoint_type,),
         ).fetchone()
-        return row[0] if row else None
+        return row["value"] if row else None
 
     # ------------------------------------------------------------------
     # Aggregation queries
