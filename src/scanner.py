@@ -126,10 +126,11 @@ class OpportunityScanner:
                 # Skip cross-chain opportunities — can't atomic execute.
                 if opp.is_cross_chain:
                     continue
-                # Skip if either pool has very low estimated liquidity.
+                # Skip if either pool has low estimated liquidity.
+                # $1M minimum ensures pools can absorb flash loan trade sizes
+                # without massive slippage. Pools below this produce fake spreads.
                 min_liq = min(buy_quote.liquidity_usd, sell_quote.liquidity_usd)
-                if min_liq > ZERO and min_liq < D("10000"):
-                    # Pool has <$10K — spread is likely fake.
+                if min_liq > ZERO and min_liq < D("1000000"):
                     continue
                 results.append(opp)
         return results

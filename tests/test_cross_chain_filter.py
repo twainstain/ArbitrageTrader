@@ -132,36 +132,35 @@ class LowLiquidityFilterTests(unittest.TestCase):
         config.validate()
         return config
 
-    def test_very_low_liquidity_filtered(self):
-        """Pools with <$10K liquidity should be filtered out."""
+    def test_low_liquidity_filtered(self):
+        """Pools with <$1M liquidity should be filtered out."""
         config = self._make_config()
         scanner = OpportunityScanner(config)
 
         quotes = [
             MarketQuote(dex="Uniswap-Ethereum", pair="WETH/USDC",
                         buy_price=3001.0, sell_price=2999.0, fee_bps=0.0,
-                        liquidity_usd=5000),  # $5K — very thin
+                        liquidity_usd=500_000),  # $500K — too thin for flash loan arb
             MarketQuote(dex="Sushi-Ethereum", pair="WETH/USDC",
                         buy_price=3081.0, sell_price=3079.0, fee_bps=0.0,
-                        liquidity_usd=5000),  # $5K — very thin
+                        liquidity_usd=500_000),
         ]
 
         result = scanner.scan_and_rank(quotes)
-        # Should be filtered — too thin.
         self.assertEqual(len(result.opportunities), 0)
 
     def test_good_liquidity_passes(self):
-        """Pools with >$10K liquidity should pass."""
+        """Pools with >$1M liquidity should pass."""
         config = self._make_config()
         scanner = OpportunityScanner(config)
 
         quotes = [
             MarketQuote(dex="Uniswap-Ethereum", pair="WETH/USDC",
                         buy_price=3001.0, sell_price=2999.0, fee_bps=0.0,
-                        liquidity_usd=1_000_000),
+                        liquidity_usd=5_000_000),  # $5M — deep enough
             MarketQuote(dex="Sushi-Ethereum", pair="WETH/USDC",
                         buy_price=3081.0, sell_price=3079.0, fee_bps=0.0,
-                        liquidity_usd=1_000_000),
+                        liquidity_usd=5_000_000),
         ]
 
         result = scanner.scan_and_rank(quotes)
