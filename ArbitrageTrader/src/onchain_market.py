@@ -30,6 +30,8 @@ from contracts import (
     PANCAKE_V3_QUOTER,
     PANCAKE_V3_QUOTER_ABI,
     PUBLIC_RPC_URLS,
+    QUICKSWAP_QUOTER,
+    QUICKSWAP_QUOTER_ABI,
     SUSHI_V3_QUOTER,
     SUSHI_V3_QUOTER_ABI,
     UNISWAP_FEE_TIERS,
@@ -55,7 +57,7 @@ from tokens import CHAIN_TOKENS
 D = Decimal
 TWO = D("2")
 
-SUPPORTED_DEX_TYPES = ("uniswap_v3", "sushi_v3", "pancakeswap_v3", "balancer_v2")
+SUPPORTED_DEX_TYPES = ("uniswap_v3", "sushi_v3", "pancakeswap_v3", "balancer_v2", "quickswap_v3")
 
 # Token decimals used when converting raw uint256 amounts.
 WETH_DECIMALS = 18
@@ -179,6 +181,8 @@ class OnChainMarket:
                     return self._quote_pancakeswap_v3(chain, base_addr, quote_addr)
                 elif dex_type == "balancer_v2":
                     return self._quote_balancer_v2(chain, base_addr, quote_addr)
+                elif dex_type == "quickswap_v3":
+                    return self._quote_quickswap_v3(chain, base_addr, quote_addr)
                 raise OnChainMarketError(f"Unknown dex_type: {dex_type}")
 
             # Try once, on RPC failure rotate and retry once.
@@ -415,4 +419,39 @@ class OnChainMarket:
                 f"Balancer queryBatchSwap returned non-negative USDC delta: {usdc_delta}"
             )
         amount_out = abs(usdc_delta)
+        return D(amount_out) / D(10 ** USDC_DECIMALS)
+
+    def _quote_quickswap_v3(
+        self, chain: str, weth: str, usdc: str
+    ) -> Decimal:
+        """Get WETH/USDC mid-price from QuickSwap V3 (Algebra) Quoter.
+
+        QuickSwap uses Algebra protocol — different interface from Uniswap V3:
+        no fee parameter (auto-detected from pool), flat args (not tuple).
+        """
+        quoter_addr = QUICKSWAP_QUOTER.get(chain)
+        if quoter_addr is None:
+            raise OnChainMarketError(
+                f"No QuickSwap quoter address for chain '{chain}'."
+            )
+
+        w3 = self._w3[chain]
+        quoter = w3.eth.contract(
+            address=Web3.to_checksum_address(quoter_addr),
+            abi=QUICKSWAP_QUOTER_ABI,
+        )
+        amount_in = 10 ** WETH_DECIMALS
+
+        result = quoter.functions.quoteExactInputSingle(
+            Web3.to_checksum_address(weth),
+            Web3.to_checksum_address(usdc),
+            amount_in,
+            0,  # limitSqrtPrice = 0 means no limit
+        ).call()
+
+        amount_out = result[0]
+        if amount_out == 0:
+            raise OnChainMarketError(
+                f"QuickSwap returned zero on {chain}."
+            )
         return D(amount_out) / D(10 ** USDC_DECIMALS)

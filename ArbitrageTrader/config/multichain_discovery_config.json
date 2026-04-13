@@ -46,9 +46,9 @@
       "chain": "polygon", "dex_type": "uniswap_v3"
     },
     {
-      "name": "Sushi-Polygon",
+      "name": "QuickSwap-Polygon",
       "base_price": 0, "fee_bps": 30.0, "volatility_bps": 0,
-      "chain": "polygon", "dex_type": "sushi_v3"
+      "chain": "polygon", "dex_type": "quickswap_v3"
     },
     {
       "name": "Uniswap-Optimism",

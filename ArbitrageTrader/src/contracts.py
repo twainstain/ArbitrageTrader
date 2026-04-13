@@ -133,6 +133,33 @@ PANCAKE_V3_QUOTER: dict[str, str] = {
 PANCAKE_V3_QUOTER_ABI = UNISWAP_V3_QUOTER_ABI
 
 # ---------------------------------------------------------------------------
+# QuickSwap V3 (Algebra) — different quoter interface, no fee parameter.
+# Deployed on Polygon.
+# ---------------------------------------------------------------------------
+
+QUICKSWAP_QUOTER: dict[str, str] = {
+    "polygon": "0xa15F0D7377B2A0C0c10db057f641beD21028FC89",
+}
+
+QUICKSWAP_QUOTER_ABI = [
+    {
+        "inputs": [
+            {"name": "tokenIn", "type": "address"},
+            {"name": "tokenOut", "type": "address"},
+            {"name": "amountIn", "type": "uint256"},
+            {"name": "limitSqrtPrice", "type": "uint160"},
+        ],
+        "name": "quoteExactInputSingle",
+        "outputs": [
+            {"name": "amountOut", "type": "uint256"},
+            {"name": "fee", "type": "uint16"},
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    }
+]
+
+# ---------------------------------------------------------------------------
 # Public RPC endpoints (free tier, rate-limited).
 # For production, use Alchemy / Infura / QuickNode with an API key.
 # ---------------------------------------------------------------------------
