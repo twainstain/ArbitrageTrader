@@ -417,7 +417,7 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
             'Buy DEX': o.buy_dex,
             'Sell DEX': o.sell_dex,
             'Spread': num(o.spread_bps, 4) + '%',
-            'Status': `<span class="tag tag-${['approved','included','dry_run'].includes(o.status)?'approved':o.status==='rejected'?'rejected':'detected'}">${o.status}</span>`,
+            'Status': `<span class="tag tag-${['approved','included','dry_run','simulation_approved'].includes(o.status)?'approved':o.status==='rejected'?'rejected':'detected'}">${o.status}</span>`,
             'Detected At': o.detected_at,
             'Updated At': o.updated_at,
         });
@@ -441,12 +441,48 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
         // Risk Decision
         const r = data.risk_decision;
         if (r) {
-            html += renderSection('Risk Decision', {
-                'Approved': r.approved ? '<span class="tag tag-approved">YES</span>' : '<span class="tag tag-rejected">NO</span>',
+            // Parse thresholds JSON string into object for better display.
+            let thresholds = r.threshold_snapshot;
+            let details = {};
+            try { details = typeof thresholds === 'string' ? JSON.parse(thresholds) : thresholds; } catch(e) {}
+
+            // Determine verdict display based on reason_code.
+            const isSimApproved = r.reason_code === 'simulation_approved';
+            const isApproved = r.approved || isSimApproved;
+            const verdictTag = isSimApproved
+                ? '<span class="tag tag-approved">SIMULATION APPROVED</span>'
+                : r.approved
+                    ? '<span class="tag tag-approved">APPROVED</span>'
+                    : '<span class="tag tag-rejected">REJECTED</span>';
+
+            const verdictFields = {
+                'Verdict': verdictTag,
                 'Reason': r.reason_code,
-                'Thresholds': r.threshold_snapshot,
-                'Decided At': r.created_at,
-            });
+            };
+
+            // Show the human-readable detail if available.
+            if (details.reason_detail) {
+                verdictFields['Detail'] = details.reason_detail;
+            }
+
+            // Show key financial metrics from the analysis.
+            if (details.net_profit) verdictFields['Net Profit'] = num(details.net_profit, 6);
+            if (details.gross_spread_pct) verdictFields['Spread'] = num(details.gross_spread_pct, 4) + '%';
+            if (details.dex_fees && details.dex_fees !== '0') verdictFields['DEX Fees'] = '$' + num(details.dex_fees, 4);
+            if (details.flash_loan_fee && details.flash_loan_fee !== '0') verdictFields['Flash Loan Fee'] = '$' + num(details.flash_loan_fee, 4);
+            if (details.slippage_cost && details.slippage_cost !== '0') verdictFields['Slippage'] = '$' + num(details.slippage_cost, 4);
+            if (details.gas_cost && details.gas_cost !== '0') verdictFields['Gas Cost'] = num(details.gas_cost, 6);
+            if (details.liquidity_score !== undefined) verdictFields['Liquidity Score'] = details.liquidity_score;
+            if (details.warning_flags && details.warning_flags.length > 0) {
+                verdictFields['Warning Flags'] = details.warning_flags.join(', ');
+            }
+            if (details.simulation) {
+                verdictFields['Mode'] = '<span class="tag tag-approved">SIMULATION</span> — would execute if live';
+            }
+
+            verdictFields['Decided At'] = r.created_at;
+
+            html += renderSection('Risk Decision', verdictFields);
         } else {
             html += renderSection('Risk Decision', null);
         }
