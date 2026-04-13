@@ -91,6 +91,10 @@ class CandidatePipeline:
           5. Submit & persist (if submitter available)
           6. Verify & persist (if verifier available)
         """
+        import time as _time
+        _t0 = _time.monotonic()
+        _timings: dict[str, float] = {}
+
         # --- Stage 1: Detection ---
         opp_id = self.repo.create_opportunity(
             pair=opportunity.pair,
@@ -99,10 +103,12 @@ class CandidatePipeline:
             sell_dex=opportunity.sell_dex,
             spread_bps=opportunity.gross_spread_pct,
         )
+        _timings["detect_ms"] = (_time.monotonic() - _t0) * 1000
         logger.info("[pipeline] %s detected: %s buy=%s sell=%s",
                      opp_id, opportunity.pair, opportunity.buy_dex, opportunity.sell_dex)
 
         # --- Stage 2: Pricing ---
+        _t1 = _time.monotonic()
         self.repo.save_pricing(
             opp_id=opp_id,
             input_amount=opportunity.cost_to_buy_quote,
@@ -113,9 +119,11 @@ class CandidatePipeline:
             expected_net_profit=opportunity.net_profit_base,
         )
         self.repo.update_opportunity_status(opp_id, "priced")
+        _timings["price_ms"] = (_time.monotonic() - _t1) * 1000
         logger.info("[pipeline] %s priced: net_profit=%.6f", opp_id, float(opportunity.net_profit_base))
 
         # --- Stage 3: Risk ---
+        _t2 = _time.monotonic()
         hour_trades = self.repo.count_opportunities_since(
             _one_hour_ago(), status="submitted"
         )
@@ -130,15 +138,20 @@ class CandidatePipeline:
             threshold_snapshot=verdict.details,
         )
 
+        _timings["risk_ms"] = (_time.monotonic() - _t2) * 1000
+
         if not verdict.approved:
             self.repo.update_opportunity_status(opp_id, "rejected")
-            logger.info("[pipeline] %s rejected: %s", opp_id, verdict.reason)
+            _timings["total_ms"] = (_time.monotonic() - _t0) * 1000
+            logger.info("[pipeline] %s rejected: %s (timings: %s)", opp_id, verdict.reason,
+                        {k: f"{v:.1f}" for k, v in _timings.items()})
             return PipelineResult(opp_id, "rejected", verdict.reason)
 
         self.repo.update_opportunity_status(opp_id, "approved")
         logger.info("[pipeline] %s approved", opp_id)
 
         # --- Stage 4: Simulation ---
+        _t3 = _time.monotonic()
         if self.simulator is not None:
             sim_ok, sim_reason = self.simulator.simulate(opportunity)
             self.repo.save_simulation(
@@ -161,7 +174,10 @@ class CandidatePipeline:
             self.repo.update_opportunity_status(opp_id, "simulated")
             logger.info("[pipeline] %s simulation passed", opp_id)
 
+        _timings["simulate_ms"] = (_time.monotonic() - _t3) * 1000
+
         # --- Stage 5: Submission ---
+        _t4 = _time.monotonic()
         if self.submitter is not None:
             tx_hash, bundle_id, target_block = self.submitter.submit(opportunity)
             exec_id = self.repo.save_execution_attempt(
@@ -211,6 +227,9 @@ class CandidatePipeline:
 
         # No submitter — dry run
         self.repo.update_opportunity_status(opp_id, "dry_run")
+        _timings["total_ms"] = (_time.monotonic() - _t0) * 1000
+        logger.info("[pipeline] %s dry_run (timings: %s)", opp_id,
+                    {k: f"{v:.1f}" for k, v in _timings.items()})
         return PipelineResult(opp_id, "dry_run", "approved_not_submitted",
                               opportunity.net_profit_base)
 

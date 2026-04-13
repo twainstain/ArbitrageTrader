@@ -8,6 +8,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from alerting.dispatcher import AlertDispatcher
 from models import Opportunity
 from persistence.db import init_db, close_db
 from persistence.repository import Repository
@@ -224,6 +225,119 @@ class PipelineFullExecutionTests(unittest.TestCase):
 
         self.assertEqual(result.final_status, "submitted")
         self.assertEqual(result.reason, "awaiting_verification")
+
+
+class _FakeBackend:
+    """Records all alerts for assertion."""
+    def __init__(self):
+        self._name = "test"
+        self.received: list[tuple] = []
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def send(self, event_type, message, details=None):
+        self.received.append((event_type, message, details))
+        return True
+
+
+class PipelineAlertingTests(unittest.TestCase):
+    """Tests that the pipeline fires alerts at key decision points."""
+
+    def setUp(self):
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.conn = init_db(self.tmp.name)
+        self.repo = Repository(self.conn)
+        self.backend = _FakeBackend()
+        self.dispatcher = AlertDispatcher([self.backend])
+
+    def tearDown(self):
+        close_db()
+        Path(self.tmp.name).unlink(missing_ok=True)
+
+    def test_simulation_failure_fires_alert(self):
+        policy = RiskPolicy(execution_enabled=True)
+        sim = _MockSimulator(success=False, reason="profit_below_minimum")
+        pipeline = CandidatePipeline(
+            self.repo, policy, simulator=sim, dispatcher=self.dispatcher)
+
+        pipeline.process(_make_opp())
+
+        events = [r[0] for r in self.backend.received]
+        self.assertIn("simulation_failed", events)
+        msg = self.backend.received[0][1]
+        self.assertIn("profit_below_minimum", msg)
+
+    def test_trade_executed_fires_alert(self):
+        policy = RiskPolicy(execution_enabled=True)
+        sim = _MockSimulator(success=True)
+        sub = _MockSubmitter()
+        ver = _MockVerifier(included=True, reverted=False, profit=D("0.004"))
+        pipeline = CandidatePipeline(
+            self.repo, policy, sim, sub, ver, dispatcher=self.dispatcher)
+
+        pipeline.process(_make_opp())
+
+        events = [r[0] for r in self.backend.received]
+        self.assertIn("trade_executed", events)
+
+    def test_trade_reverted_fires_alert(self):
+        policy = RiskPolicy(execution_enabled=True)
+        sim = _MockSimulator(success=True)
+        sub = _MockSubmitter()
+        ver = _MockVerifier(included=True, reverted=True)
+        pipeline = CandidatePipeline(
+            self.repo, policy, sim, sub, ver, dispatcher=self.dispatcher)
+
+        pipeline.process(_make_opp())
+
+        events = [r[0] for r in self.backend.received]
+        self.assertIn("trade_reverted", events)
+
+    def test_not_included_fires_alert(self):
+        policy = RiskPolicy(execution_enabled=True)
+        sim = _MockSimulator(success=True)
+        sub = _MockSubmitter()
+        ver = _MockVerifier(included=False)
+        pipeline = CandidatePipeline(
+            self.repo, policy, sim, sub, ver, dispatcher=self.dispatcher)
+
+        pipeline.process(_make_opp())
+
+        events = [r[0] for r in self.backend.received]
+        self.assertIn("trade_not_included", events)
+
+    def test_dry_run_no_execution_alerts(self):
+        """Dry run (no submitter) should not fire trade alerts."""
+        policy = RiskPolicy(execution_enabled=True)
+        pipeline = CandidatePipeline(
+            self.repo, policy, dispatcher=self.dispatcher)
+
+        pipeline.process(_make_opp())
+
+        events = [r[0] for r in self.backend.received]
+        self.assertNotIn("trade_executed", events)
+        self.assertNotIn("trade_reverted", events)
+        self.assertNotIn("trade_not_included", events)
+
+    def test_rejected_no_alerts(self):
+        """Rejected opportunities should not fire any alerts."""
+        policy = RiskPolicy(execution_enabled=False)
+        pipeline = CandidatePipeline(
+            self.repo, policy, dispatcher=self.dispatcher)
+
+        pipeline.process(_make_opp())
+
+        self.assertEqual(len(self.backend.received), 0)
+
+    def test_no_dispatcher_doesnt_crash(self):
+        """Pipeline without explicit dispatcher works fine."""
+        policy = RiskPolicy(execution_enabled=True)
+        pipeline = CandidatePipeline(self.repo, policy)
+
+        result = pipeline.process(_make_opp())
+        self.assertEqual(result.final_status, "dry_run")
 
 
 if __name__ == "__main__":
