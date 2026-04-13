@@ -111,6 +111,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </table>
 
     <script>
+    // Auto-detect base path so the dashboard works both at /dashboard
+    // and at /apps/arb-trader/dashboard (behind CloudFront path routing).
+    const API_BASE = window.location.pathname.split('/dashboard')[0];
+
     const WINDOWS = ['5m','15m','1h','4h','8h','24h','3d','1w','1m'];
     let currentWindow = '15m';
     let selectedChain = '';
@@ -120,7 +124,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     let chainData = [];
     let oppData = [];
 
-    async function fetchJSON(url) { const r = await fetch(url); return r.json(); }
+    async function fetchJSON(url) { const r = await fetch(API_BASE + url); return r.json(); }
 
     function statusClass(val, goodIf) {
         if (goodIf === 'true') return val ? 'status-ok' : 'status-bad';
@@ -270,7 +274,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const tbody = document.querySelector('#opp-table tbody');
         tbody.innerHTML = data.slice(0, 30).map(o => `
             <tr>
-                <td><a href="/opportunity/${o.opportunity_id}" style="color:#58a6ff">${o.opportunity_id.slice(4,16)}</a></td>
+                <td><a href="${API_BASE}/opportunity/${o.opportunity_id}" style="color:#58a6ff">${o.opportunity_id.slice(4,16)}</a></td>
                 <td>${o.pair}</td>
                 <td>${o.chain}</td>
                 <td>${o.buy_dex}</td>
@@ -358,12 +362,16 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
     </style>
 </head>
 <body>
-    <a class="back" href="/dashboard">&larr; Back to Dashboard</a>
     <h1 id="title">Loading...</h1>
     <div id="content"></div>
 
     <script>
+    // Auto-detect base path (works at /opportunity/X and /apps/arb-trader/opportunity/X)
+    const API_BASE = window.location.pathname.split('/opportunity/')[0];
     const oppId = window.location.pathname.split('/').pop();
+
+    document.getElementById('title').insertAdjacentHTML('beforebegin',
+        `<a class="back" href="${API_BASE}/dashboard">&larr; Back to Dashboard</a>`);
 
     function val(v) { return v !== null && v !== undefined ? v : '<span class="empty">n/a</span>'; }
     function num(v, d=6) { return v !== null && v !== undefined ? Number(v).toFixed(d) : '<span class="empty">n/a</span>'; }
@@ -379,7 +387,7 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
     }
 
     async function load() {
-        const resp = await fetch(`/opportunities/${oppId}/full`);
+        const resp = await fetch(`${API_BASE}/opportunities/${oppId}/full`);
         if (!resp.ok) { document.getElementById('title').textContent = 'Not Found'; return; }
         const data = await resp.json();
 

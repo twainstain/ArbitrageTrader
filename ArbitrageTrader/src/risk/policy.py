@@ -76,58 +76,85 @@ class RiskPolicy:
 
         Returns RiskVerdict with approved=True only if ALL rules pass.
         """
+        # Build analysis details for every verdict (approved or rejected).
+        analysis = {
+            "net_profit": str(opportunity.net_profit_base),
+            "trade_size": str(opportunity.trade_size),
+            "gross_spread_pct": str(opportunity.gross_spread_pct),
+            "dex_fees": str(opportunity.dex_fee_cost_quote),
+            "flash_loan_fee": str(opportunity.flash_loan_fee_quote),
+            "slippage_cost": str(opportunity.slippage_cost_quote),
+            "gas_cost": str(opportunity.gas_cost_base),
+            "liquidity_score": opportunity.liquidity_score,
+            "warning_flags": list(opportunity.warning_flags),
+            "buy_dex": opportunity.buy_dex,
+            "sell_dex": opportunity.sell_dex,
+        }
+
         # Rule 1: Global kill switch
         if not self.execution_enabled:
-            return RiskVerdict(False, "execution_disabled", {})
+            analysis["reason_detail"] = "Live execution is disabled (kill switch off). Enable via POST /execution."
+            return RiskVerdict(False, "execution_disabled", analysis)
 
         # Rule 2: Minimum net profit
         if opportunity.net_profit_base < self.min_net_profit:
-            return RiskVerdict(False, "below_min_profit", {
-                "required": str(self.min_net_profit),
-                "actual": str(opportunity.net_profit_base),
-            })
+            analysis["reason_detail"] = (
+                f"Net profit {opportunity.net_profit_base} is below minimum {self.min_net_profit}. "
+                f"Costs: DEX fees={opportunity.dex_fee_cost_quote}, "
+                f"flash={opportunity.flash_loan_fee_quote}, "
+                f"slippage={opportunity.slippage_cost_quote}, "
+                f"gas={opportunity.gas_cost_base}."
+            )
+            analysis["required"] = str(self.min_net_profit)
+            return RiskVerdict(False, "below_min_profit", analysis)
 
         # Rule 3: Warning flags
         if len(opportunity.warning_flags) > self.max_warning_flags:
-            return RiskVerdict(False, "too_many_flags", {
-                "max": self.max_warning_flags,
-                "actual": len(opportunity.warning_flags),
-                "flags": list(opportunity.warning_flags),
-            })
+            analysis["reason_detail"] = (
+                f"Too many warning flags ({len(opportunity.warning_flags)} > max {self.max_warning_flags}): "
+                f"{', '.join(opportunity.warning_flags)}."
+            )
+            return RiskVerdict(False, "too_many_flags", analysis)
 
         # Rule 4: Liquidity score
         if opportunity.liquidity_score < self.min_liquidity_score:
-            return RiskVerdict(False, "low_liquidity_score", {
-                "required": self.min_liquidity_score,
-                "actual": opportunity.liquidity_score,
-            })
+            analysis["reason_detail"] = (
+                f"Liquidity score {opportunity.liquidity_score:.2f} is below minimum {self.min_liquidity_score}. "
+                f"Pool may be too thin for the trade size."
+            )
+            return RiskVerdict(False, "low_liquidity_score", analysis)
 
         # Rule 5: Gas-to-profit ratio
         if opportunity.net_profit_base > ZERO and opportunity.gas_cost_base > ZERO:
             gas_ratio = opportunity.gas_cost_base / opportunity.net_profit_base
             if gas_ratio > self.max_gas_profit_ratio:
-                return RiskVerdict(False, "gas_too_expensive", {
-                    "max_ratio": str(self.max_gas_profit_ratio),
-                    "actual_ratio": str(gas_ratio),
-                })
+                analysis["reason_detail"] = (
+                    f"Gas cost is {float(gas_ratio)*100:.1f}% of profit "
+                    f"(max allowed {float(self.max_gas_profit_ratio)*100:.0f}%). "
+                    f"Gas={opportunity.gas_cost_base}, profit={opportunity.net_profit_base}."
+                )
+                analysis["gas_ratio"] = str(gas_ratio)
+                return RiskVerdict(False, "gas_too_expensive", analysis)
 
         # Rule 6: Rate limiting
         if current_hour_trades >= self.max_trades_per_hour:
-            return RiskVerdict(False, "rate_limit_exceeded", {
-                "max": self.max_trades_per_hour,
-                "current": current_hour_trades,
-            })
+            analysis["reason_detail"] = (
+                f"Rate limit: {current_hour_trades} trades in the last hour "
+                f"(max {self.max_trades_per_hour})."
+            )
+            return RiskVerdict(False, "rate_limit_exceeded", analysis)
 
         # Rule 7: Exposure limit
         new_exposure = current_pair_exposure + opportunity.trade_size
         if new_exposure > self.max_exposure_per_pair:
-            return RiskVerdict(False, "exposure_limit", {
-                "max": str(self.max_exposure_per_pair),
-                "current": str(current_pair_exposure),
-                "would_be": str(new_exposure),
-            })
+            analysis["reason_detail"] = (
+                f"Exposure would be {new_exposure} (max {self.max_exposure_per_pair}). "
+                f"Current exposure: {current_pair_exposure}."
+            )
+            return RiskVerdict(False, "exposure_limit", analysis)
 
-        return RiskVerdict(True, "approved", {})
+        analysis["reason_detail"] = "All risk checks passed."
+        return RiskVerdict(True, "approved", analysis)
 
     def to_dict(self) -> dict:
         """Serialize the current policy for logging/API."""

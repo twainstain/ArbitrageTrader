@@ -169,9 +169,44 @@ def main() -> None:
             mid = (cheapest.buy_price + priciest.sell_price) / _D("2")
             if mid <= _ZERO:
                 continue
-            spread = priciest.sell_price - cheapest.buy_price
-            spread_pct = spread / cheapest.buy_price * _D("100")
-            net_profit = spread / mid  # rough estimate
+            trade_size = config.trade_size
+            buy_cost = cheapest.buy_price * trade_size
+            sell_proceeds = priciest.sell_price * trade_size
+
+            # Compute realistic costs.
+            buy_fee_bps = cheapest.fee_bps
+            sell_fee_bps = priciest.fee_bps
+            buy_cost_with_fee = buy_cost / (_D("1") - buy_fee_bps / _D("10000"))
+            sell_after_fee = sell_proceeds * (_D("1") - sell_fee_bps / _D("10000"))
+            flash_fee = buy_cost * (config.flash_loan_fee_bps / _D("10000"))
+            slippage = buy_cost * (config.slippage_bps / _D("10000"))
+            dex_fee_cost = (buy_cost_with_fee - buy_cost) + (sell_proceeds - sell_after_fee)
+
+            gross_spread = sell_proceeds - buy_cost
+            gross_spread_pct = gross_spread / buy_cost * _D("100") if buy_cost > _ZERO else _ZERO
+            net_profit_quote = sell_after_fee - buy_cost_with_fee - flash_fee - slippage
+            net_profit_base = (net_profit_quote / mid) - config.estimated_gas_cost_base
+
+            # Liquidity assessment.
+            min_liq = min(cheapest.liquidity_usd, priciest.liquidity_usd)
+            liq_score = 1.0
+            if min_liq > _ZERO:
+                import math
+                liq_score = min(1.0, math.log10(max(float(min_liq), 1)) / 7.0)
+
+            # Warning flags.
+            flags = []
+            if min_liq > _ZERO and min_liq < _D("100000"):
+                flags.append("low_liquidity")
+            min_vol = min(cheapest.volume_usd, priciest.volume_usd)
+            if min_vol > _ZERO and min_vol < _D("50000"):
+                flags.append("thin_market")
+            if dex_fee_cost + flash_fee + slippage > _ZERO and gross_spread > _ZERO:
+                fee_ratio = (dex_fee_cost + flash_fee + slippage) / gross_spread
+                if fee_ratio > _D("0.8"):
+                    flags.append("high_fee_ratio")
+            if net_profit_base <= _ZERO:
+                flags.append("negative_after_costs")
 
             # Resolve chain from DEX config.
             chain_val = ""
@@ -184,13 +219,19 @@ def main() -> None:
                 pair=config.pair,
                 buy_dex=cheapest.dex,
                 sell_dex=priciest.dex,
-                trade_size=config.trade_size,
-                cost_to_buy_quote=cheapest.buy_price * config.trade_size,
-                proceeds_from_sell_quote=priciest.sell_price * config.trade_size,
-                gross_profit_quote=spread * config.trade_size,
-                net_profit_quote=spread * config.trade_size,
-                net_profit_base=net_profit,
-                gross_spread_pct=spread_pct,
+                trade_size=trade_size,
+                cost_to_buy_quote=buy_cost_with_fee,
+                proceeds_from_sell_quote=sell_after_fee,
+                gross_profit_quote=gross_spread * trade_size,
+                net_profit_quote=net_profit_quote,
+                net_profit_base=net_profit_base,
+                gross_spread_pct=gross_spread_pct,
+                dex_fee_cost_quote=dex_fee_cost,
+                flash_loan_fee_quote=flash_fee,
+                slippage_cost_quote=slippage,
+                gas_cost_base=config.estimated_gas_cost_base,
+                warning_flags=tuple(flags),
+                liquidity_score=liq_score,
                 chain=chain_val,
             )
 
