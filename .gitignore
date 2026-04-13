@@ -1,0 +1,4 @@
+# Only track ArbitrageTrader — ignore everything else in src/
+/*
+!/ArbitrageTrader
+!/.gitignore
