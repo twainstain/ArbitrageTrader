@@ -295,44 +295,19 @@ class EventDrivenScanner:
                 if ch:
                     chain_map.setdefault(ch, []).append(q)
 
+            # Use the strategy's evaluate_pair() to compute real costs
+            # (DEX fees, flash loan fee, slippage, gas) per the config.
             from strategy import ArbitrageStrategy
             chain_strategy = ArbitrageStrategy(self.config)
             for chain_name, chain_quotes in chain_map.items():
                 if len(chain_quotes) < 2:
                     continue
-                # Build same-chain opportunity from raw price extremes.
-                cheapest = min(chain_quotes, key=lambda q: q.buy_price)
-                priciest = max(chain_quotes, key=lambda q: q.sell_price)
-                if cheapest.dex == priciest.dex:
-                    continue
-                mid = (cheapest.buy_price + priciest.sell_price) / D("2")
-                if mid <= ZERO:
-                    continue
-                spread = priciest.sell_price - cheapest.buy_price
-                spread_pct = spread / cheapest.buy_price * D("100")
-                net_profit = spread / mid
-
-                chain_val = ""
-                for dc in self.config.dexes:
-                    if dc.name == cheapest.dex and dc.chain:
-                        chain_val = dc.chain
-                        break
-
-                opp = Opportunity(
-                    pair=self.config.pair,
-                    buy_dex=cheapest.dex, sell_dex=priciest.dex,
-                    trade_size=self.config.trade_size,
-                    cost_to_buy_quote=cheapest.buy_price * self.config.trade_size,
-                    proceeds_from_sell_quote=priciest.sell_price * self.config.trade_size,
-                    gross_profit_quote=spread * self.config.trade_size,
-                    net_profit_quote=spread * self.config.trade_size,
-                    net_profit_base=net_profit,
-                    gross_spread_pct=spread_pct,
-                    chain=chain_val,
-                )
-                score = float(net_profit) * 0.5  # lower priority than scanner results
-                self.queue.push(opp, priority=score)
-                pushed += 1
+                # Find best same-chain opportunity using the full cost model.
+                chain_opp = chain_strategy.find_best_opportunity(chain_quotes)
+                if chain_opp is not None:
+                    score = float(chain_opp.net_profit_base) * 0.5
+                    self.queue.push(chain_opp, priority=score)
+                    pushed += 1
 
             if pushed > 0:
                 logger.info(

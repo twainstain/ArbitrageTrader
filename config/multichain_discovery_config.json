@@ -4,10 +4,10 @@
   "quote_asset": "USDC",
   "trade_size": 1.0,
   "min_profit_base": 0.0,
-  "estimated_gas_cost_base": 0.0,
-  "flash_loan_fee_bps": 0.0,
+  "estimated_gas_cost_base": 0.002,
+  "flash_loan_fee_bps": 9.0,
   "flash_loan_provider": "aave_v3",
-  "slippage_bps": 0.0,
+  "slippage_bps": 15.0,
   "poll_interval_seconds": 15.0,
   "dexes": [
     {
