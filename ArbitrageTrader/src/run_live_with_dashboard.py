@@ -66,7 +66,7 @@ def main() -> None:
     # --- Risk policy (dry-run: execution disabled) ---
     risk_policy = RiskPolicy(
         execution_enabled=False,  # dry-run: detect + price + risk, don't execute
-        min_net_profit=0.0005,
+        min_net_profit=0,  # capture all opportunities for dashboard visibility
     )
 
     # --- Pipeline ---
@@ -123,6 +123,10 @@ def main() -> None:
                 time.sleep(args.sleep)
             continue
 
+        # Filter outlier quotes (e.g., Sushi returning $115 when others show $2200).
+        from bot import ArbitrageBot
+        quotes = ArbitrageBot._filter_outliers(quotes)
+
         # Run scanner — get ALL opportunities, not just the best.
         result = scanner.scan_and_rank(quotes)
 
@@ -144,22 +148,59 @@ def main() -> None:
                 chain_map.setdefault(ch, []).append(q)
 
         # Process same-chain opportunities per chain.
+        # Use a zero-threshold config so we capture ALL chains even with tiny spreads.
         processed_chains = set()
+        from copy import copy
+        from decimal import Decimal as _D
         from strategy import ArbitrageStrategy
-        chain_strategy = ArbitrageStrategy(config)
+        from models import Opportunity, ZERO as _ZERO
 
         for chain_name, chain_quotes in chain_map.items():
             if len(chain_quotes) < 2:
                 continue
-            chain_opp = chain_strategy.find_best_opportunity(chain_quotes)
-            if chain_opp is not None:
-                processed_chains.add(chain_name)
-                logger.info(
-                    "Same-chain [%s]: %s buy=%s sell=%s spread=%.4f%% net=%.6f",
-                    chain_name, chain_opp.pair, chain_opp.buy_dex, chain_opp.sell_dex,
-                    float(chain_opp.gross_spread_pct), float(chain_opp.net_profit_base),
-                )
-                pipeline.process(chain_opp)
+
+            # Find best spread on this chain — even if negative after fees.
+            # Sort by raw price difference to find the best buy/sell pair.
+            cheapest = min(chain_quotes, key=lambda q: q.buy_price)
+            priciest = max(chain_quotes, key=lambda q: q.sell_price)
+            if cheapest.dex == priciest.dex:
+                continue
+
+            mid = (cheapest.buy_price + priciest.sell_price) / _D("2")
+            if mid <= _ZERO:
+                continue
+            spread = priciest.sell_price - cheapest.buy_price
+            spread_pct = spread / cheapest.buy_price * _D("100")
+            net_profit = spread / mid  # rough estimate
+
+            # Resolve chain from DEX config.
+            chain_val = ""
+            for dc in config.dexes:
+                if dc.name == cheapest.dex and dc.chain:
+                    chain_val = dc.chain
+                    break
+
+            opp = Opportunity(
+                pair=config.pair,
+                buy_dex=cheapest.dex,
+                sell_dex=priciest.dex,
+                trade_size=config.trade_size,
+                cost_to_buy_quote=cheapest.buy_price * config.trade_size,
+                proceeds_from_sell_quote=priciest.sell_price * config.trade_size,
+                gross_profit_quote=spread * config.trade_size,
+                net_profit_quote=spread * config.trade_size,
+                net_profit_base=net_profit,
+                gross_spread_pct=spread_pct,
+                chain=chain_val,
+            )
+
+            processed_chains.add(chain_name)
+            logger.info(
+                "Same-chain [%s]: %s buy=%s sell=%s spread=%.4f%% net=%.6f",
+                chain_name, opp.pair, opp.buy_dex, opp.sell_dex,
+                float(opp.gross_spread_pct), float(opp.net_profit_base),
+            )
+            pipeline.process(opp)
 
         # Also process the overall best (may be cross-chain).
         opp = result.best
