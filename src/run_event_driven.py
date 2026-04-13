@@ -72,6 +72,7 @@ class PipelineConsumer:
         circuit_breaker: CircuitBreaker,
         metrics: MetricsCollector,
         alerter: SmartAlerter,
+        latency_tracker: "LatencyTracker | None" = None,
         poll_interval: float = 0.5,
     ) -> None:
         self.queue = queue
@@ -79,6 +80,7 @@ class PipelineConsumer:
         self.breaker = circuit_breaker
         self.metrics = metrics
         self.alerter = alerter
+        self.latency_tracker = latency_tracker
         self.poll_interval = poll_interval
         self._running = False
         self._thread: threading.Thread | None = None
@@ -122,6 +124,18 @@ class PipelineConsumer:
             result = self.pipeline.process(opp)
             latency_ms = time.time() * 1000 - start_ms
             self.metrics.record_latency_ms(latency_ms)
+
+            # Record to latency.jsonl for detailed analysis.
+            if self.latency_tracker:
+                self.latency_tracker.record_pipeline(
+                    opp_id=result.opportunity_id,
+                    pair=opp.pair, chain=opp.chain,
+                    buy_dex=opp.buy_dex, sell_dex=opp.sell_dex,
+                    spread_pct=float(opp.gross_spread_pct),
+                    net_profit=float(opp.net_profit_base),
+                    status=result.final_status,
+                    pipeline_timings={"total_ms": str(latency_ms)},
+                )
 
             logger.info(
                 "Pipeline [%s]: %s %s→%s spread=%.4f%% → %s (%s) [%.0fms]",
@@ -351,10 +365,15 @@ def main() -> None:
     dashboard_thread.start()
     logger.info("Dashboard at http://localhost:%d/dashboard", args.port)
 
+    # --- Latency tracker ---
+    from observability.latency_tracker import LatencyTracker
+    latency_tracker = LatencyTracker()
+    logger.info("Latency tracking → logs/latency.jsonl")
+
     # --- Consumer (queue → pipeline) ---
     consumer = PipelineConsumer(
         queue=queue, pipeline=pipeline, circuit_breaker=breaker,
-        metrics=metrics, alerter=alerter,
+        metrics=metrics, alerter=alerter, latency_tracker=latency_tracker,
     )
     consumer.start()
 
