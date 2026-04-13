@@ -82,6 +82,20 @@ class Opportunity:
         _coerce_decimals(self)
 
 
+    @property
+    def is_cross_chain(self) -> bool:
+        """Detect if buy and sell DEXs are on different chains.
+
+        Uses the DEX naming convention "DEXName-ChainName" to extract chains.
+        Cross-chain arb can't be executed atomically — out of scope.
+        """
+        buy_parts = self.buy_dex.rsplit("-", 1)
+        sell_parts = self.sell_dex.rsplit("-", 1)
+        if len(buy_parts) == 2 and len(sell_parts) == 2:
+            return buy_parts[1].lower() != sell_parts[1].lower()
+        return False  # can't determine — assume same chain
+
+
 @dataclass(frozen=True)
 class ExecutionResult:
     success: bool

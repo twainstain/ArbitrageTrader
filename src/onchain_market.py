@@ -207,6 +207,28 @@ class OnChainMarket:
 
             mid = _validate_price(mid, dex.name, chain)  # type: ignore[union-attr]
 
+            # --- Price impact check: estimate pool depth ---
+            # Quote a tiny amount (0.01 WETH) to get the "zero-impact" price.
+            # Compare with the full trade size price. Large divergence = thin pool.
+            # This catches Avalanche returning $400/WETH when it has $5K liquidity.
+            estimated_liquidity = D("0")
+            try:
+                small_mid = self._quote_small_amount(chain, base_addr, quote_addr, dex_type)
+                if small_mid > D("0") and mid > D("0"):
+                    # Price impact = how much per-unit price changes with trade size.
+                    impact_pct = abs(small_mid - mid) / small_mid * D("100")
+                    if impact_pct > D("5"):
+                        # >5% price impact = very thin pool. Estimate liquidity.
+                        # Rough: if 1 WETH moves price 5%, pool has ~20 WETH worth.
+                        estimated_liquidity = mid * D("100") / max(impact_pct, D("1"))
+                    elif impact_pct > D("1"):
+                        estimated_liquidity = mid * D("500") / max(impact_pct, D("1"))
+                    else:
+                        # <1% impact = deep pool.
+                        estimated_liquidity = D("10000000")  # $10M+
+            except Exception:
+                pass  # Can't estimate — leave at 0
+
             # Model bid-ask spread as symmetric around mid: buy = mid + half, sell = mid - half.
             # The DEX fee tier approximates the full spread (market maker compensation).
             # In reality buy/sell may differ, but symmetric is acceptable for arb detection.
@@ -217,6 +239,7 @@ class OnChainMarket:
                 buy_price=mid + half_spread,
                 sell_price=mid - half_spread,
                 fee_bps=dex.fee_bps,  # type: ignore[union-attr]
+                liquidity_usd=estimated_liquidity,
             )
 
         # Fetch all DEX quotes in parallel.
@@ -237,6 +260,70 @@ class OnChainMarket:
                     )
 
         return quotes
+
+    # ------------------------------------------------------------------
+    # Price impact estimation
+    # ------------------------------------------------------------------
+
+    def _quote_small_amount(
+        self, chain: str, base: str, quote: str, dex_type: str
+    ) -> Decimal:
+        """Quote a tiny amount (0.01 WETH) to get the zero-impact reference price.
+
+        Compares with the full 1 WETH quote to measure price impact.
+        If 0.01 WETH → $22/unit and 1 WETH → $4/unit, the pool is thin.
+        """
+        # Use 1% of standard amount (0.01 WETH = 10^16 wei).
+        SMALL_AMOUNT = 10 ** (WETH_DECIMALS - 2)  # 0.01 WETH
+
+        w3 = self._w3[chain]
+        quoter_addr = UNISWAP_V3_QUOTER_PER_CHAIN.get(chain, UNISWAP_V3_QUOTER_V2)
+
+        if dex_type == "quickswap_v3":
+            qaddr = QUICKSWAP_QUOTER.get(chain)
+            if not qaddr:
+                return D("0")
+            quoter = w3.eth.contract(
+                address=Web3.to_checksum_address(qaddr), abi=QUICKSWAP_QUOTER_ABI,
+            )
+            result = quoter.functions.quoteExactInputSingle(
+                Web3.to_checksum_address(base), Web3.to_checksum_address(quote),
+                SMALL_AMOUNT, 0,
+            ).call()
+            amount_out = result[0]
+        elif dex_type in ("uniswap_v3", "sushi_v3", "pancakeswap_v3"):
+            if dex_type == "sushi_v3":
+                qaddr = SUSHI_V3_QUOTER.get(chain)
+            elif dex_type == "pancakeswap_v3":
+                qaddr = PANCAKE_V3_QUOTER.get(chain)
+            else:
+                qaddr = quoter_addr
+            if not qaddr:
+                return D("0")
+            quoter = w3.eth.contract(
+                address=Web3.to_checksum_address(qaddr),
+                abi=UNISWAP_V3_QUOTER_ABI,
+            )
+            best_out = 0
+            for fee in (100, 500, 3000, 10000):
+                try:
+                    result = quoter.functions.quoteExactInputSingle((
+                        Web3.to_checksum_address(base),
+                        Web3.to_checksum_address(quote),
+                        SMALL_AMOUNT, fee, 0,
+                    )).call()
+                    if result[0] > best_out:
+                        best_out = result[0]
+                except Exception:
+                    continue
+            amount_out = best_out
+        else:
+            return D("0")
+
+        if amount_out == 0:
+            return D("0")
+        # Return per-unit price (scale up by 100 since we quoted 0.01 WETH).
+        return D(amount_out) * D("100") / D(10 ** USDC_DECIMALS)
 
     # ------------------------------------------------------------------
     # DEX-specific quoting

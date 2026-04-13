@@ -28,6 +28,8 @@ from decimal import Decimal
 from config import BotConfig
 from log import get_logger
 from models import ZERO, MarketQuote, Opportunity
+
+D = Decimal
 from strategy import ArbitrageStrategy
 
 logger = get_logger(__name__)
@@ -103,7 +105,11 @@ class OpportunityScanner:
         return self._history[-100:]
 
     def _find_all_opportunities(self, quotes: list[MarketQuote]) -> list[Opportunity]:
-        """Evaluate every cross-DEX pair and return all profitable opportunities."""
+        """Evaluate every cross-DEX pair and return all profitable opportunities.
+
+        Filters out cross-chain pairs (can't be executed atomically) and
+        opportunities from pools with very low liquidity (inflated spreads).
+        """
         if len(quotes) < 2:
             return []
 
@@ -115,8 +121,17 @@ class OpportunityScanner:
                 if buy_quote.pair != sell_quote.pair:
                     continue
                 opp = self.strategy.evaluate_pair(buy_quote, sell_quote)
-                if opp is not None:
-                    results.append(opp)
+                if opp is None:
+                    continue
+                # Skip cross-chain opportunities — can't atomic execute.
+                if opp.is_cross_chain:
+                    continue
+                # Skip if either pool has very low estimated liquidity.
+                min_liq = min(buy_quote.liquidity_usd, sell_quote.liquidity_usd)
+                if min_liq > ZERO and min_liq < D("10000"):
+                    # Pool has <$10K — spread is likely fake.
+                    continue
+                results.append(opp)
         return results
 
     def _composite_score(self, opp: Opportunity) -> float:
