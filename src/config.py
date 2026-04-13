@@ -1,6 +1,53 @@
 """Configuration loading, validation, and data classes.
 
 All financial values use Decimal (per CLAUDE.md: "NEVER use float").
+
+Config class hierarchy
+----------------------
+Three frozen dataclasses represent the bot's configuration:
+
+* **DexConfig** -- Per-DEX settings: name, simulated base price, fee tier,
+  volatility estimate, and optional chain/dex_type for live mode.  In
+  simulation mode ``base_price`` drives the synthetic market; in live mode
+  (when ``chain`` is set) it is unused and may be zero.
+
+* **PairConfig** -- One tradeable pair (e.g. WETH/USDC) with its own trade
+  size.  When discovered via DexScreener, ``base_address`` and
+  ``quote_address`` carry the on-chain contract addresses so the market source
+  can price tokens that are not in the hardcoded ``tokens.py`` registry.
+
+* **BotConfig** -- Top-level configuration that aggregates everything: the
+  primary pair, financial parameters (trade size, min profit, gas estimate,
+  flash-loan fee, slippage), poll timing, a list of ``DexConfig`` entries
+  (at least two are required for arbitrage), and optional ``extra_pairs``.
+
+``from_file()``
+---------------
+``BotConfig.from_file(path)`` is the standard way to load configuration:
+
+1. Reads and parses the JSON file at *path*.
+2. Converts all numeric values to ``Decimal`` via ``Decimal(str(...))``.
+3. Supports legacy field names (``min_profit_eth`` / ``estimated_gas_cost_eth``)
+   as aliases for the current ``_base`` suffixed names.
+4. Parses the ``dexes`` array into ``DexConfig`` objects and the optional
+   ``extra_pairs`` array into ``PairConfig`` objects.
+5. Calls ``validate()`` before returning, ensuring the config is safe to use.
+
+Validation rules
+----------------
+``validate()`` enforces constraints that, if violated, would cause silent
+financial errors or undefined behaviour at runtime:
+
+* At least 2 DEXs are required -- arbitrage needs a buy and a sell venue.
+* ``flash_loan_provider`` must be a recognized provider (``aave_v3`` or
+  ``balancer``) to ensure the correct fee schedule is applied.
+* ``trade_size`` must be positive -- a zero or negative trade is meaningless.
+* ``poll_interval_seconds`` must be non-negative -- negative sleep is invalid.
+* Profit and gas thresholds must be non-negative -- negative minimums would
+  invert the safety filters.
+* Fee and slippage BPS must be non-negative -- negative fees make no sense.
+* Per-DEX: ``base_price`` must be positive in simulation mode (no chain set),
+  ``fee_bps`` must be in [0, 9999], and ``volatility_bps`` must be >= 0.
 """
 
 from __future__ import annotations

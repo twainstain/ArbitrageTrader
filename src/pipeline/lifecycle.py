@@ -141,11 +141,23 @@ class CandidatePipeline:
         _timings["risk_ms"] = (_time.monotonic() - _t2) * 1000
 
         if not verdict.approved:
-            self.repo.update_opportunity_status(opp_id, "rejected")
-            _timings["total_ms"] = (_time.monotonic() - _t0) * 1000
-            logger.info("[pipeline] %s rejected: %s (timings: %s)", opp_id, verdict.reason,
-                        {k: f"{v:.1f}" for k, v in _timings.items()})
-            return PipelineResult(opp_id, "rejected", verdict.reason)
+            # Distinguish "simulation_approved" (would trade) from actual rejections.
+            if verdict.reason == "simulation_approved":
+                status = "simulation_approved"
+                self.repo.update_opportunity_status(opp_id, status)
+                _timings["total_ms"] = (_time.monotonic() - _t0) * 1000
+                logger.info("[pipeline] %s SIMULATION APPROVED (would execute): spread=%.4f%% net=%.6f (timings: %s)",
+                            opp_id, float(opportunity.gross_spread_pct),
+                            float(opportunity.net_profit_base),
+                            {k: f"{v:.1f}" for k, v in _timings.items()})
+                return PipelineResult(opp_id, "simulation_approved", verdict.reason,
+                                      opportunity.net_profit_base)
+            else:
+                self.repo.update_opportunity_status(opp_id, "rejected")
+                _timings["total_ms"] = (_time.monotonic() - _t0) * 1000
+                logger.info("[pipeline] %s rejected: %s (timings: %s)", opp_id, verdict.reason,
+                            {k: f"{v:.1f}" for k, v in _timings.items()})
+                return PipelineResult(opp_id, "rejected", verdict.reason)
 
         self.repo.update_opportunity_status(opp_id, "approved")
         logger.info("[pipeline] %s approved", opp_id)

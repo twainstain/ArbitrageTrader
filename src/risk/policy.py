@@ -101,10 +101,11 @@ class RiskPolicy:
             "sell_dex": opportunity.sell_dex,
         }
 
-        # Rule 1: Global kill switch
-        if not self.execution_enabled:
-            analysis["reason_detail"] = "Live execution is disabled (kill switch off). Enable via POST /execution."
-            return RiskVerdict(False, "execution_disabled", analysis)
+        # Rule 1: Global kill switch — simulation mode.
+        # When execution is disabled, we still evaluate ALL other rules to determine
+        # if the trade WOULD have been approved. This lets the dashboard show
+        # "simulation_approved" vs "simulation_rejected" instead of just "rejected".
+        simulation_mode = not self.execution_enabled
 
         # Rule 2: Minimum net profit
         if opportunity.net_profit_base < self.min_net_profit:
@@ -162,6 +163,18 @@ class RiskPolicy:
                 f"Current exposure: {current_pair_exposure}."
             )
             return RiskVerdict(False, "exposure_limit", analysis)
+
+        # All rules passed.
+        if simulation_mode:
+            # In simulation mode: trade WOULD have been approved, but not executing.
+            # Dashboard shows "simulation_approved" so operators can see which
+            # trades would have been profitable if execution were enabled.
+            analysis["reason_detail"] = (
+                "SIMULATION: All risk checks passed. This trade would be executed "
+                "if live mode were enabled (POST /execution {enabled: true})."
+            )
+            analysis["simulation"] = True
+            return RiskVerdict(False, "simulation_approved", analysis)
 
         analysis["reason_detail"] = "All risk checks passed."
         return RiskVerdict(True, "approved", analysis)

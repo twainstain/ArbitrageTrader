@@ -59,10 +59,31 @@ D = Decimal
 
 
 class PipelineConsumer:
-    """Background thread that pops opportunities from the queue and processes
-    them through the full candidate lifecycle pipeline.
+    """Background *consumer* thread that drains the ``CandidateQueue`` and
+    processes each opportunity through the full candidate lifecycle pipeline.
 
-    Runs until stopped. Checks circuit breaker before each trade.
+    Threading model
+    ~~~~~~~~~~~~~~~
+    Runs as a single **daemon thread** (``pipeline-consumer``) started via
+    ``start()`` and stopped via ``stop()``.  The thread polls the shared
+    ``CandidateQueue`` at a configurable interval (default 0.5 s).  Because
+    the queue is a thread-safe ``queue.PriorityQueue``, no external locking
+    is required between the producer (``EventDrivenScanner``) and this
+    consumer.
+
+    Coordination via the queue
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    The ``EventDrivenScanner`` (running on the **main thread**) pushes
+    ``Opportunity`` objects onto the queue with a priority score.  This
+    consumer pops the highest-priority item, checks the ``CircuitBreaker``
+    (which may block execution if too many reverts or RPC errors have
+    occurred), and feeds the opportunity through ``CandidatePipeline`` --
+    the full detect -> price -> risk -> simulate -> submit -> verify
+    lifecycle.  Results are recorded to metrics, latency tracker, and the
+    smart alerter.
+
+    Runs until ``stop()`` sets ``_running = False``, at which point the
+    thread drains naturally and joins within 5 seconds.
     """
 
     def __init__(
@@ -170,10 +191,37 @@ class PipelineConsumer:
 
 
 class EventDrivenScanner:
-    """Listens for swap events across chains, scans for opportunities,
-    and pushes them to the candidate queue.
+    """**Producer** that polls for swap events, scans for arbitrage
+    opportunities, and pushes them onto the shared ``CandidateQueue``.
 
-    This is the producer side of the event-driven flow.
+    Threading model
+    ~~~~~~~~~~~~~~~
+    Runs on the **main thread** (via ``run()``).  This is intentional: the
+    main thread handles OS signals (SIGINT / SIGTERM) for graceful shutdown,
+    and Python's ``signal`` module requires signal handlers to be registered
+    from the main thread.  The complementary ``PipelineConsumer`` runs as a
+    background daemon thread.
+
+    Coordination via the queue
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~
+    After each poll cycle the scanner:
+
+    1. Fetches fresh ``MarketQuote`` objects from ``OnChainMarket``.
+    2. Filters outlier quotes (e.g. a DEX returning a stale price that is
+       orders of magnitude off).
+    3. Runs the ``OpportunityScanner`` to rank cross-DEX opportunities.
+    4. Builds same-chain opportunities by grouping quotes by chain suffix
+       and comparing the cheapest buy vs. the most expensive sell within
+       each chain (identical logic to ``run_live_with_dashboard.py``).
+    5. Pushes all actionable opportunities onto the ``CandidateQueue`` with
+       a priority score proportional to expected profit.
+
+    The consumer thread picks these up asynchronously, decoupling the
+    scan cadence from the (potentially slower) pipeline processing time.
+
+    In the current implementation, event detection uses **HTTP RPC polling**
+    at a configurable interval (default 2 s).  A future enhancement would
+    replace this with WebSocket subscriptions for lower latency.
     """
 
     def __init__(

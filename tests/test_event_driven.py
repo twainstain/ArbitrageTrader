@@ -89,7 +89,7 @@ class QueueToPipelineTests(unittest.TestCase):
         candidate = queue.pop()
         result = pipeline.process(candidate.opportunity)
 
-        self.assertIn(result.final_status, ("rejected", "dry_run"))
+        self.assertIn(result.final_status, ("rejected", "dry_run", "simulation_approved"))
         # Verify it's in the DB.
         opps = self.repo.get_recent_opportunities(10)
         self.assertEqual(len(opps), 1)

@@ -132,12 +132,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         return '';
     }
     function tagClass(s) {
-        if (['approved','included','simulated','dry_run'].includes(s)) return 'tag-approved';
+        if (['approved','included','simulated','dry_run','simulation_approved'].includes(s)) return 'tag-approved';
         if (['rejected','reverted','simulation_failed'].includes(s)) return 'tag-rejected';
         if (['submitted'].includes(s)) return 'tag-submitted';
         return 'tag-detected';
     }
-    function isWin(s) { return ['approved','included','simulated','dry_run','submitted'].includes(s); }
+    function isWin(s) { return ['approved','included','simulated','dry_run','submitted','simulation_approved'].includes(s); }
 
     async function loadChainFilter() {
         const chains = await fetchJSON('/dashboard/distinct-chains');

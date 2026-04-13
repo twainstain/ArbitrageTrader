@@ -22,6 +22,23 @@ logger = get_logger(__name__)
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI argument parser and load ``.env`` defaults.
+
+    Loads environment variables from ``.env`` (via ``load_env()``) before
+    constructing the parser so that default values can reference env vars.
+
+    The parser exposes:
+    * ``--config`` / ``--iterations`` / ``--no-sleep`` / ``--dry-run`` --
+      general run parameters whose defaults come from ``.env`` when the CLI
+      flag is not provided (resolved in ``main()``).
+    * ``--execute`` -- opt-in to real on-chain execution via ChainExecutor.
+    * ``--discover`` / ``--discover-chain`` / ``--discover-min-volume`` --
+      DexScreener-based live pair discovery.
+    * Market source group (mutually exclusive): ``--live``, ``--onchain``,
+      ``--subgraph``, ``--historical``.  Only one may be specified; if none
+      is given, ``_resolve_mode()`` falls back to the ``BOT_MODE`` env var
+      (default: simulated).
+    """
     load_env()
 
     parser = argparse.ArgumentParser(description="Run the Python arbitrage bot repro.")
@@ -99,7 +116,21 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _resolve_mode(args: argparse.Namespace) -> str:
-    """Determine market mode: CLI flags take priority over .env BOT_MODE."""
+    """Determine the market data mode with a clear priority chain.
+
+    Resolution order (first match wins):
+
+    1. **CLI flag** -- ``--live``, ``--onchain``, ``--subgraph``, or
+       ``--historical`` explicitly set on the command line.
+    2. **Environment variable** -- ``BOT_MODE`` in ``.env`` (read by
+       ``get_bot_mode()``).  Accepted values: ``"live"``, ``"onchain"``,
+       ``"subgraph"``, ``"historical"``, ``"simulated"``.
+    3. **Default** -- ``"simulated"`` (returned by ``get_bot_mode()`` when
+       ``BOT_MODE`` is unset).
+
+    This ensures that one-off CLI invocations always override persistent env
+    config, while ``.env`` provides convenient defaults for repeated runs.
+    """
     if args.live:
         return "live"
     if args.onchain:

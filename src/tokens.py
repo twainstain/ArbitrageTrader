@@ -1,6 +1,52 @@
 """Token address registry for supported chains.
 
-DeFi Llama uses the format ``{chain}:{address}`` to identify tokens.
+This module is the single source of truth for canonical ERC-20 contract
+addresses used throughout the arbitrage bot.  Every market source (LiveMarket,
+OnChainMarket, SubgraphMarket) resolves token addresses through the
+``CHAIN_TOKENS`` registry defined here.
+
+DeFi Llama uses the format ``{chain}:{address}`` to identify tokens, which is
+why ``defillama_coin_id()`` exists at the bottom of this file.
+
+Chain-specific notes
+--------------------
+* **BSC (BNB Chain)** -- The primary wrapped native token is WBNB, not WETH.
+  The ``TokenAddresses`` dataclass carries an optional ``wbnb`` field
+  specifically for this chain.  WETH *does* exist on BSC (bridged), so both
+  fields are populated.  PancakeSwap pairs are typically denominated in
+  WBNB/USDT rather than WETH/USDC.
+
+* **Polygon USDC migration** -- In 2023 Polygon migrated from the bridged
+  ``USDC.e`` (0x2791Bce8....) to native USDC issued by Circle
+  (0x3c499c54...).  Uniswap V3 liquidity has largely moved to native USDC, so
+  that is the address stored here.  If you need to interact with legacy
+  USDC.e pools, add a separate field or override at the config level.
+
+Adding a new chain
+------------------
+1. Add a new entry to ``CHAIN_TOKENS`` with at least ``weth`` and ``usdc``.
+2. Add a public RPC URL in ``contracts.py`` → ``PUBLIC_RPC_URLS``.
+3. Add DEX quoter addresses in ``contracts.py`` if on-chain quoting is needed.
+4. If the chain uses a non-standard native wrapped token (like BSC's WBNB),
+   add an optional field to ``TokenAddresses`` and a corresponding entry in
+   ``SYMBOL_TO_ATTR``.
+
+SYMBOL_TO_ATTR
+--------------
+Maps user-facing ticker symbols (e.g. "ETH", "BTC") to the attribute name on
+``TokenAddresses``.  This lets callers pass familiar symbols without knowing
+whether the underlying field is ``weth`` or ``wbtc``.  Both the wrapped and
+unwrapped names map to the same attribute (e.g. "ETH" -> "weth",
+"BTC" -> "wbtc") because on-chain we always deal with the wrapped variant.
+
+token_decimals()
+----------------
+Returns the *standard* decimal precision for well-known token symbols.  This
+is a convenience used when converting between raw on-chain uint256 amounts and
+human-readable Decimal values.  The function hard-codes the widely adopted
+defaults (USDC/USDT = 6, WBTC = 8, everything else = 18) rather than making
+an on-chain ``decimals()`` call, because these values never change for the
+tokens we trade and an RPC round-trip would add unnecessary latency.
 """
 
 from __future__ import annotations

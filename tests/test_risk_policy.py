@@ -27,11 +27,20 @@ def _make_opp(**overrides) -> Opportunity:
 
 
 class KillSwitchTests(unittest.TestCase):
-    def test_execution_disabled_rejects_everything(self) -> None:
+    def test_simulation_mode_shows_simulation_approved(self) -> None:
+        """When execution disabled + trade passes all rules → simulation_approved."""
         policy = RiskPolicy(execution_enabled=False)
         verdict = policy.evaluate(_make_opp())
         self.assertFalse(verdict.approved)
-        self.assertEqual(verdict.reason, "execution_disabled")
+        self.assertEqual(verdict.reason, "simulation_approved")
+        self.assertTrue(verdict.details.get("simulation"))
+
+    def test_simulation_mode_real_rejection_still_rejected(self) -> None:
+        """When execution disabled + trade fails a rule → real rejection, not simulation."""
+        policy = RiskPolicy(execution_enabled=False, min_net_profit=D("100"))
+        verdict = policy.evaluate(_make_opp(net_profit_base=D("0.005")))
+        self.assertFalse(verdict.approved)
+        self.assertEqual(verdict.reason, "below_min_profit")
 
     def test_execution_enabled_allows(self) -> None:
         policy = RiskPolicy(execution_enabled=True)

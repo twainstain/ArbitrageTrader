@@ -1,6 +1,56 @@
-"""On-chain contract addresses and minimal ABIs for DEX quoters.
+"""On-chain contract addresses, minimal ABIs, and public RPC URLs for DEX quoters.
 
-Only the read-only quoting functions are included — no state-changing calls.
+This module is the contract-level counterpart to ``tokens.py``.  While
+``tokens.py`` maps *token* addresses, this file maps *DEX contract* addresses
+(quoters, vaults) and provides the ABI fragments needed to call their
+read-only quoting functions.  No state-changing call ABIs are included --
+execution ABIs live in ``chain_executor.py`` and the Solidity contracts under
+``contracts/``.
+
+Contract registry structure
+---------------------------
+Each DEX family has:
+
+1. **A per-chain address dict** (e.g. ``UNISWAP_V3_QUOTER_PER_CHAIN``) that
+   maps chain names to the deployed QuoterV2 address on that chain.
+2. **A minimal ABI list** containing only the ``quoteExactInputSingle``
+   function signature needed for read-only price quotes.
+3. Forks that share the same interface (SushiSwap V3, PancakeSwap V3) reuse
+   the Uniswap V3 ABI directly (``SUSHI_V3_QUOTER_ABI = UNISWAP_V3_QUOTER_ABI``).
+
+QuoterV2 addresses -- why they differ per chain
+------------------------------------------------
+Despite Uniswap using CREATE2 deterministic deployment, the QuoterV2 address
+is **not** identical on every chain.  The canonical address
+``0x61fFE014...`` works on Ethereum, Arbitrum, Polygon, and Optimism, but
+Base, BSC, and Avalanche were deployed with different factory nonces or by
+different deployer wallets, producing different addresses.  SushiSwap and
+PancakeSwap are entirely separate deployments and have their own addresses.
+QuickSwap on Polygon uses the Algebra protocol (not Uniswap V3), so its
+quoter has a different ABI altogether (no ``fee`` parameter -- Algebra uses
+dynamic fees determined by the pool).
+
+Fee tiers
+---------
+``UNISWAP_FEE_TIERS`` enumerates the standard Uniswap V3 fee tiers in
+hundredths of a basis point (the ``fee`` parameter in pool contracts):
+
+* 100  -> 0.01 % (1 bps)   -- stable-stable pairs (USDC/USDT)
+* 500  -> 0.05 % (5 bps)   -- correlated pairs (WETH/stETH)
+* 3000 -> 0.30 % (30 bps)  -- standard pairs (WETH/USDC)
+* 10000 -> 1.00 % (100 bps) -- exotic / long-tail pairs
+
+PancakeSwap V3 supports 100, 500, 2500, and 10000.  SushiSwap V3 mirrors
+Uniswap's tiers.  QuickSwap (Algebra) determines fees dynamically per pool.
+
+Backup / public RPC URLs
+-------------------------
+``PUBLIC_RPC_URLS`` provides free-tier, rate-limited RPC endpoints for every
+supported chain.  These are used as fallbacks when no ``RPC_<CHAIN>`` override
+is set in ``.env``.  They are adequate for development and occasional live
+scanning but **not** for production execution -- latency and rate limits will
+cause missed opportunities.  For production, set per-chain RPC overrides via
+environment variables pointing to Alchemy / Infura / QuickNode endpoints.
 """
 
 from __future__ import annotations

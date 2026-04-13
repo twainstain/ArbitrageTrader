@@ -1,10 +1,16 @@
 """Core data models: MarketQuote, Opportunity, ExecutionResult.
 
 All financial values use Decimal to avoid floating-point precision errors
-(per CLAUDE.md: "NEVER use float — use Decimal or integer math").
+(per CLAUDE.md: "NEVER use float -- use Decimal or integer math").
 
 Float/int values passed to Decimal fields are auto-coerced via __post_init__
-to ease migration — new code should always pass Decimal or string literals.
+to ease migration -- new code should always pass Decimal or string literals.
+
+The three dataclasses form a pipeline: market sources produce
+``MarketQuote`` objects, the scanner/strategy layer compares quotes and
+builds ``Opportunity`` objects, and the executor produces an
+``ExecutionResult`` for each attempted trade.  All three are frozen
+(immutable) to prevent accidental mutation after creation.
 """
 
 from __future__ import annotations
@@ -20,6 +26,18 @@ ONE = D("1")
 BPS_DIVISOR = D("10000")
 
 # Fields that should remain as-is (not coerced to Decimal).
+#
+# This set lists every dataclass field across MarketQuote, Opportunity, and
+# ExecutionResult that is intentionally *not* a financial value and therefore
+# must not be converted to Decimal by ``_coerce_decimals()``.  The categories
+# are:
+#   - String identifiers: dex, pair, buy_dex, sell_dex, venue_type,
+#     strategy_type, reason, chain
+#   - Booleans: is_actionable, success
+#   - Non-financial floats: quote_timestamp (Unix epoch), liquidity_score
+#     (0.0-1.0 ranking metric)
+#   - Nested objects: opportunity (an Opportunity instance inside
+#     ExecutionResult), warning_flags (tuple of strings)
 _NON_DECIMAL_FIELDS = frozenset({
     "dex", "pair", "buy_dex", "sell_dex", "venue_type", "strategy_type",
     "reason", "is_actionable", "warning_flags", "success",
@@ -28,7 +46,25 @@ _NON_DECIMAL_FIELDS = frozenset({
 
 
 def _coerce_decimals(instance: object) -> None:
-    """Convert any float/int financial fields to Decimal on a frozen dataclass."""
+    """Convert any float/int financial fields to Decimal on a frozen dataclass.
+
+    This auto-coercion exists because many callers (tests, market sources,
+    JSON deserialization) naturally produce ``float`` or ``int`` values for
+    prices and quantities.  Forcing every call-site to wrap values in
+    ``Decimal(str(...))`` would be error-prone and verbose.  Instead, each
+    dataclass calls this function in ``__post_init__`` to silently convert
+    numeric types to Decimal via ``Decimal(str(value))``.
+
+    The ``str()`` intermediate is critical: ``Decimal(0.1)`` produces
+    ``Decimal('0.10000000000000000555...')`` due to IEEE-754, whereas
+    ``Decimal(str(0.1))`` produces the expected ``Decimal('0.1')``.
+
+    Fields listed in ``_NON_DECIMAL_FIELDS`` are skipped because they are
+    either non-numeric (strings, bools, tuples) or intentionally kept as
+    float (timestamps, scores).
+
+    Uses ``object.__setattr__`` to bypass the frozen-dataclass write guard.
+    """
     for f in fields(instance):  # type: ignore[arg-type]
         if f.name in _NON_DECIMAL_FIELDS:
             continue
@@ -86,8 +122,16 @@ class Opportunity:
     def is_cross_chain(self) -> bool:
         """Detect if buy and sell DEXs are on different chains.
 
-        Uses the DEX naming convention "DEXName-ChainName" to extract chains.
-        Cross-chain arb can't be executed atomically — out of scope.
+        Uses the DEX naming convention ``"DEXName-ChainName"`` (e.g.
+        ``"UniswapV3-Ethereum"``, ``"PancakeV3-BSC"``) to extract the chain
+        suffix by splitting on the last hyphen.  If both suffixes exist and
+        differ (case-insensitive), the opportunity spans two chains.
+
+        Cross-chain arbitrage cannot be executed atomically in a single
+        transaction (no flash-loan across chains), so these opportunities are
+        flagged and filtered out by the scanner.  If the naming convention is
+        absent (no hyphen), the method conservatively returns ``False``
+        (assumes same-chain).
         """
         buy_parts = self.buy_dex.rsplit("-", 1)
         sell_parts = self.sell_dex.rsplit("-", 1)

@@ -71,16 +71,16 @@ class PipelineRejectionTests(unittest.TestCase):
         close_db()
         Path(self.tmp.name).unlink(missing_ok=True)
 
-    def test_rejected_by_kill_switch(self):
+    def test_simulation_mode_shows_simulation_approved(self):
+        """Kill switch off + passing trade → simulation_approved (not rejected)."""
         policy = RiskPolicy(execution_enabled=False)
         pipeline = CandidatePipeline(self.repo, policy)
 
         result = pipeline.process(_make_opp())
-        self.assertEqual(result.final_status, "rejected")
-        self.assertEqual(result.reason, "execution_disabled")
+        self.assertEqual(result.final_status, "simulation_approved")
 
         opp = self.repo.get_opportunity(result.opportunity_id)
-        self.assertEqual(opp["status"], "rejected")
+        self.assertEqual(opp["status"], "simulation_approved")
 
     def test_rejected_by_min_profit(self):
         policy = RiskPolicy(execution_enabled=True, min_net_profit=D("1.0"))

@@ -1,11 +1,47 @@
-"""Run live scanning across all chains with the dashboard.
+"""Run live scanning across all chains with a web dashboard.
+
+When to use this vs ``run_event_driven``
+----------------------------------------
+* **run_live_with_dashboard** (this module) -- A simpler, **polling-based**
+  scanner aimed at DeFi Llama aggregated prices (``--live`` mode, default) or
+  on-chain RPC quotes (``--onchain``).  It runs a fixed number of iterations
+  with a configurable sleep between scans.  Best suited for initial
+  exploration, dashboards, and dry-run monitoring where you want a predictable
+  scan cadence and a quick visual overview.
+
+* **run_event_driven** -- A **producer/consumer** architecture with a
+  priority queue.  Designed for production: the scanner pushes opportunities
+  onto a thread-safe queue and a background consumer processes them through
+  the full lifecycle pipeline.  Supports circuit breakers, latency tracking,
+  and higher throughput.  Use this when you need continuous, indefinite
+  scanning with robust error handling.
+
+Per-chain scanning logic
+------------------------
+After fetching quotes from all DEXs (across all configured chains), the
+module groups quotes by chain (extracted from the DEX name suffix, e.g.
+``"UniswapV3-Ethereum"`` -> ``"ethereum"``).  For each chain with at least
+two DEX quotes, it identifies the cheapest buy price and the highest sell
+price, then constructs a same-chain ``Opportunity`` with full cost
+accounting (DEX fees, flash-loan fees, slippage, gas).
+
+Why same-chain opportunities are built separately
+-------------------------------------------------
+The ``OpportunityScanner`` evaluates *all* quote pairs globally, which may
+produce cross-chain opportunities (e.g. buy on Arbitrum, sell on Ethereum).
+Cross-chain arb cannot be executed atomically in a single flash-loan
+transaction, so it is out of scope for automatic execution.  By explicitly
+grouping quotes per chain and building same-chain opportunities, this module
+ensures the dashboard always shows the best *executable* spread on each
+chain, alongside the global best (which may or may not be cross-chain).
 
 Starts:
   1. FastAPI dashboard on port 8000 (background thread)
-  2. Live bot scanning all 12 chains via DeFi Llama
-  3. Every scan result is fed through the pipeline → DB → dashboard
+  2. Live bot scanning all configured chains
+  3. Every scan result is fed through the pipeline -> DB -> dashboard
 
-Usage:
+Usage::
+
     PYTHONPATH=src python -m run_live_with_dashboard --iterations 10
 """
 

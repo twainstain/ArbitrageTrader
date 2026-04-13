@@ -90,5 +90,46 @@ class PaperExecutorTests(unittest.TestCase):
         self.assertEqual(result.opportunity.sell_dex, "B")
 
 
+class PaperExecutorEdgeCaseTests(unittest.TestCase):
+    """Additional edge cases for PaperExecutor."""
+
+    def test_very_small_profit_still_executes(self) -> None:
+        """Even tiny profits should succeed (the strategy already filters)."""
+        config = _make_config()
+        executor = PaperExecutor(config)
+        opp = _make_opportunity(net_profit_base=0.000001)
+        result = executor.execute(opp)
+        self.assertTrue(result.success)
+
+    def test_large_profit_executes(self) -> None:
+        config = _make_config()
+        executor = PaperExecutor(config)
+        opp = _make_opportunity(net_profit_base=10.0)
+        result = executor.execute(opp)
+        self.assertTrue(result.success)
+
+    def test_result_realized_profit_equals_expected(self) -> None:
+        """Paper executor assumes perfect execution — realized = expected."""
+        config = _make_config()
+        executor = PaperExecutor(config)
+        opp = _make_opportunity(net_profit_base=0.123456)
+        result = executor.execute(opp)
+        from decimal import Decimal
+        self.assertEqual(result.realized_profit_base, Decimal("0.123456"))
+
+    def test_result_reason_contains_paper_mode(self) -> None:
+        config = _make_config()
+        executor = PaperExecutor(config)
+        result = executor.execute(_make_opportunity())
+        self.assertIn("paper", result.reason.lower())
+
+    def test_failed_result_has_zero_profit(self) -> None:
+        config = _make_config()
+        executor = PaperExecutor(config)
+        result = executor.execute(_make_opportunity(net_profit_base=-5.0))
+        from decimal import Decimal
+        self.assertEqual(result.realized_profit_base, Decimal("0"))
+
+
 if __name__ == "__main__":
     unittest.main()
