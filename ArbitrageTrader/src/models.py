@@ -1,0 +1,93 @@
+"""Core data models: MarketQuote, Opportunity, ExecutionResult.
+
+All financial values use Decimal to avoid floating-point precision errors
+(per CLAUDE.md: "NEVER use float — use Decimal or integer math").
+
+Float/int values passed to Decimal fields are auto-coerced via __post_init__
+to ease migration — new code should always pass Decimal or string literals.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field, fields
+from decimal import Decimal
+
+# Convenience alias for constructing Decimal literals.
+D = Decimal
+
+ZERO = D("0")
+ONE = D("1")
+BPS_DIVISOR = D("10000")
+
+# Fields that should remain as-is (not coerced to Decimal).
+_NON_DECIMAL_FIELDS = frozenset({
+    "dex", "pair", "buy_dex", "sell_dex", "venue_type", "strategy_type",
+    "reason", "is_actionable", "warning_flags", "success",
+    "quote_timestamp", "liquidity_score", "opportunity", "chain",
+})
+
+
+def _coerce_decimals(instance: object) -> None:
+    """Convert any float/int financial fields to Decimal on a frozen dataclass."""
+    for f in fields(instance):  # type: ignore[arg-type]
+        if f.name in _NON_DECIMAL_FIELDS:
+            continue
+        val = getattr(instance, f.name)
+        if isinstance(val, (int, float)) and not isinstance(val, bool):
+            object.__setattr__(instance, f.name, D(str(val)))
+
+
+@dataclass(frozen=True)
+class MarketQuote:
+    dex: str
+    pair: str
+    buy_price: Decimal
+    sell_price: Decimal
+    fee_bps: Decimal
+    # Enriched fields for risk assessment and ranking (per scanner doc).
+    volume_usd: Decimal = ZERO       # 24h trading volume in USD
+    liquidity_usd: Decimal = ZERO    # Total liquidity / TVL in USD
+    quote_timestamp: float = 0.0     # Unix timestamp (not financial — stays float)
+    venue_type: str = "dex"           # "dex" or "cex"
+
+    def __post_init__(self) -> None:
+        _coerce_decimals(self)
+
+
+@dataclass(frozen=True)
+class Opportunity:
+    pair: str
+    buy_dex: str
+    sell_dex: str
+    trade_size: Decimal
+    cost_to_buy_quote: Decimal
+    proceeds_from_sell_quote: Decimal
+    gross_profit_quote: Decimal
+    net_profit_quote: Decimal
+    net_profit_base: Decimal
+    # Individual cost breakdown (per the video's recommended scanner output).
+    gross_spread_pct: Decimal = ZERO
+    dex_fee_cost_quote: Decimal = ZERO
+    flash_loan_fee_quote: Decimal = ZERO
+    slippage_cost_quote: Decimal = ZERO
+    gas_cost_base: Decimal = ZERO
+    is_actionable: bool = True
+    # Risk assessment fields (per arbitrage scanner doc).
+    warning_flags: tuple = ()         # e.g. ("low_liquidity", "stale_quote")
+    liquidity_score: float = 1.0      # 0.0–1.0 ranking metric (not financial — stays float)
+    strategy_type: str = "cross_exchange"
+    chain: str = ""                   # chain where this opportunity exists
+
+    def __post_init__(self) -> None:
+        _coerce_decimals(self)
+
+
+@dataclass(frozen=True)
+class ExecutionResult:
+    success: bool
+    reason: str
+    realized_profit_base: Decimal
+    opportunity: Opportunity
+
+    def __post_init__(self) -> None:
+        _coerce_decimals(self)

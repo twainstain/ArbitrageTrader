@@ -1,0 +1,197 @@
+"""Candidate lifecycle pipeline.
+
+Orchestrates the full arbitrage candidate flow per the architecture doc:
+  detected → priced → risk_approved/rejected → simulated → submitted → outcome
+
+Each stage is persisted to the database so the entire decision is
+auditable and replayable after the fact.
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from decimal import Decimal
+from typing import Protocol
+
+from models import ZERO, MarketQuote, Opportunity
+from persistence.repository import Repository
+from risk.policy import RiskPolicy, RiskVerdict
+
+D = Decimal
+logger = logging.getLogger(__name__)
+
+
+class Simulator(Protocol):
+    """Protocol for transaction simulation."""
+    def simulate(self, opportunity: Opportunity) -> tuple[bool, str]: ...
+
+
+class Submitter(Protocol):
+    """Protocol for transaction submission."""
+    def submit(self, opportunity: Opportunity) -> tuple[str, str, int]:
+        """Returns (tx_hash, bundle_id, target_block)."""
+        ...
+
+
+class ResultVerifier(Protocol):
+    """Protocol for verifying on-chain results."""
+    def verify(self, tx_hash: str) -> tuple[bool, bool, int, Decimal]:
+        """Returns (included, reverted, gas_used, actual_profit)."""
+        ...
+
+
+@dataclass
+class PipelineResult:
+    """Outcome of processing one candidate through the pipeline."""
+    opportunity_id: str
+    final_status: str
+    reason: str
+    net_profit: Decimal = ZERO
+
+
+class CandidatePipeline:
+    """Process arbitrage candidates through the full lifecycle.
+
+    Each stage persists its result to the database before proceeding.
+    If any stage fails, the pipeline stops and records the rejection.
+    """
+
+    def __init__(
+        self,
+        repo: Repository,
+        risk_policy: RiskPolicy,
+        simulator: Simulator | None = None,
+        submitter: Submitter | None = None,
+        verifier: ResultVerifier | None = None,
+    ) -> None:
+        self.repo = repo
+        self.risk_policy = risk_policy
+        self.simulator = simulator
+        self.submitter = submitter
+        self.verifier = verifier
+
+    def process(self, opportunity: Opportunity) -> PipelineResult:
+        """Run a single opportunity through the full pipeline.
+
+        Stages:
+          1. Detect & persist
+          2. Price & persist
+          3. Risk evaluate & persist
+          4. Simulate & persist (if simulator available)
+          5. Submit & persist (if submitter available)
+          6. Verify & persist (if verifier available)
+        """
+        # --- Stage 1: Detection ---
+        opp_id = self.repo.create_opportunity(
+            pair=opportunity.pair,
+            chain=opportunity.chain,
+            buy_dex=opportunity.buy_dex,
+            sell_dex=opportunity.sell_dex,
+            spread_bps=opportunity.gross_spread_pct,
+        )
+        logger.info("[pipeline] %s detected: %s buy=%s sell=%s",
+                     opp_id, opportunity.pair, opportunity.buy_dex, opportunity.sell_dex)
+
+        # --- Stage 2: Pricing ---
+        self.repo.save_pricing(
+            opp_id=opp_id,
+            input_amount=opportunity.cost_to_buy_quote,
+            estimated_output=opportunity.proceeds_from_sell_quote,
+            fee_cost=opportunity.dex_fee_cost_quote,
+            slippage_cost=opportunity.slippage_cost_quote,
+            gas_estimate=opportunity.gas_cost_base,
+            expected_net_profit=opportunity.net_profit_base,
+        )
+        self.repo.update_opportunity_status(opp_id, "priced")
+        logger.info("[pipeline] %s priced: net_profit=%.6f", opp_id, float(opportunity.net_profit_base))
+
+        # --- Stage 3: Risk ---
+        hour_trades = self.repo.count_opportunities_since(
+            _one_hour_ago(), status="submitted"
+        )
+        verdict = self.risk_policy.evaluate(
+            opportunity,
+            current_hour_trades=hour_trades,
+        )
+        self.repo.save_risk_decision(
+            opp_id=opp_id,
+            approved=verdict.approved,
+            reason_code=verdict.reason,
+            threshold_snapshot=verdict.details,
+        )
+
+        if not verdict.approved:
+            self.repo.update_opportunity_status(opp_id, "rejected")
+            logger.info("[pipeline] %s rejected: %s", opp_id, verdict.reason)
+            return PipelineResult(opp_id, "rejected", verdict.reason)
+
+        self.repo.update_opportunity_status(opp_id, "approved")
+        logger.info("[pipeline] %s approved", opp_id)
+
+        # --- Stage 4: Simulation ---
+        if self.simulator is not None:
+            sim_ok, sim_reason = self.simulator.simulate(opportunity)
+            self.repo.save_simulation(
+                opp_id=opp_id,
+                success=sim_ok,
+                revert_reason=sim_reason if not sim_ok else "",
+                expected_net_profit=opportunity.net_profit_base,
+            )
+
+            if not sim_ok:
+                self.repo.update_opportunity_status(opp_id, "simulation_failed")
+                logger.info("[pipeline] %s simulation failed: %s", opp_id, sim_reason)
+                return PipelineResult(opp_id, "simulation_failed", sim_reason)
+
+            self.repo.update_opportunity_status(opp_id, "simulated")
+            logger.info("[pipeline] %s simulation passed", opp_id)
+
+        # --- Stage 5: Submission ---
+        if self.submitter is not None:
+            tx_hash, bundle_id, target_block = self.submitter.submit(opportunity)
+            exec_id = self.repo.save_execution_attempt(
+                opp_id=opp_id,
+                submission_type="flashbots",
+                tx_hash=tx_hash,
+                bundle_id=bundle_id,
+                target_block=target_block,
+            )
+            self.repo.update_opportunity_status(opp_id, "submitted")
+            logger.info("[pipeline] %s submitted: tx=%s block=%d", opp_id, tx_hash, target_block)
+
+            # --- Stage 6: Verification ---
+            if self.verifier is not None:
+                included, reverted, gas_used, actual_profit = self.verifier.verify(tx_hash)
+                self.repo.save_trade_result(
+                    execution_id=exec_id,
+                    included=included,
+                    reverted=reverted,
+                    gas_used=gas_used,
+                    actual_net_profit=actual_profit,
+                )
+
+                if included and not reverted:
+                    self.repo.update_opportunity_status(opp_id, "included")
+                    logger.info("[pipeline] %s included: profit=%.6f", opp_id, float(actual_profit))
+                    return PipelineResult(opp_id, "included", "success", actual_profit)
+                elif reverted:
+                    self.repo.update_opportunity_status(opp_id, "reverted")
+                    logger.info("[pipeline] %s reverted", opp_id)
+                    return PipelineResult(opp_id, "reverted", "tx_reverted")
+                else:
+                    self.repo.update_opportunity_status(opp_id, "not_included")
+                    logger.info("[pipeline] %s not included", opp_id)
+                    return PipelineResult(opp_id, "not_included", "bundle_expired")
+
+            return PipelineResult(opp_id, "submitted", "awaiting_verification")
+
+        # No submitter — dry run
+        self.repo.update_opportunity_status(opp_id, "dry_run")
+        return PipelineResult(opp_id, "dry_run", "approved_not_submitted",
+                              opportunity.net_profit_base)
+
+
+def _one_hour_ago() -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
