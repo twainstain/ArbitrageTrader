@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Protocol
 
+from alerting.dispatcher import AlertDispatcher
 from models import ZERO, MarketQuote, Opportunity
 from persistence.repository import Repository
 from risk.policy import RiskPolicy, RiskVerdict
@@ -64,12 +65,14 @@ class CandidatePipeline:
         simulator: Simulator | None = None,
         submitter: Submitter | None = None,
         verifier: ResultVerifier | None = None,
+        dispatcher: AlertDispatcher | None = None,
     ) -> None:
         self.repo = repo
         self.risk_policy = risk_policy
         self.simulator = simulator
         self.submitter = submitter
         self.verifier = verifier
+        self.dispatcher = dispatcher or AlertDispatcher()
 
     def process(self, opportunity: Opportunity) -> PipelineResult:
         """Run a single opportunity through the full pipeline.
@@ -142,6 +145,11 @@ class CandidatePipeline:
             if not sim_ok:
                 self.repo.update_opportunity_status(opp_id, "simulation_failed")
                 logger.info("[pipeline] %s simulation failed: %s", opp_id, sim_reason)
+                self.dispatcher.alert("simulation_failed",
+                    f"Simulation failed: {opportunity.pair}\n"
+                    f"Buy: {opportunity.buy_dex} → Sell: {opportunity.sell_dex}\n"
+                    f"Reason: {sim_reason}",
+                    {"pair": opportunity.pair, "reason": sim_reason})
                 return PipelineResult(opp_id, "simulation_failed", sim_reason)
 
             self.repo.update_opportunity_status(opp_id, "simulated")

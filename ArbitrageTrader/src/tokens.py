@@ -14,6 +14,7 @@ class TokenAddresses:
     usdc: str
     usdt: str | None = None
     wbtc: str | None = None
+    wbnb: str | None = None  # BSC native wrapped token
 
 
 # Canonical contract addresses per chain.
@@ -35,11 +36,13 @@ CHAIN_TOKENS: dict[str, TokenAddresses] = {
         wbtc="0x2f2a2543B76A4166549F7aaB2e75Bef0aefC5B0f",
     ),
     # BSC (BNB Chain) — PancakeSwap's primary chain.
+    # Primary pairs are WBNB/USDT, not WETH/USDC.
     "bsc": TokenAddresses(
         weth="0x2170Ed0880ac9A755fd29B2688956BD959F933F8",
         usdc="0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d",
         usdt="0x55d398326f99059fF775485246999027B3197955",
         wbtc="0x7130d2A12B9BCbFAe4f2634d864A1Ee1Ce3Ead9c",
+        wbnb="0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c",
     ),
     "polygon": TokenAddresses(
         weth="0x7ceB23fD6bC0adD59E62ac25578270cFf1b9f619",
@@ -92,6 +95,7 @@ SYMBOL_TO_ATTR: dict[str, str] = {
     "USDC": "usdc",
     "USDT": "usdt",
     "WBTC": "wbtc", "BTC": "wbtc",
+    "WBNB": "wbnb", "BNB": "wbnb",
 }
 
 

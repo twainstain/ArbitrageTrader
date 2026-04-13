@@ -229,8 +229,8 @@ class OnChainMarket:
     ) -> Decimal:
         """Get WETH/USDC mid-price from Uniswap V3 QuoterV2.
 
-        Tries 500 (0.05%) and 3000 (0.30%) fee tiers — the two most liquid
-        for major pairs — and returns the best quote.
+        Tries all standard fee tiers (100, 500, 3000, 10000) and returns
+        the best quote. Different chains have liquidity in different tiers.
         """
         w3 = self._w3[chain]
         quoter_addr = UNISWAP_V3_QUOTER_PER_CHAIN.get(chain, UNISWAP_V3_QUOTER_V2)
@@ -241,7 +241,7 @@ class OnChainMarket:
         amount_in = 10 ** WETH_DECIMALS
 
         best_out = 0
-        for fee in (500, 3000):
+        for fee in (100, 500, 3000, 10000):
             try:
                 result = quoter.functions.quoteExactInputSingle(
                     (
@@ -268,7 +268,7 @@ class OnChainMarket:
     ) -> Decimal:
         """Get WETH/USDC mid-price from SushiSwap V3 QuoterV2.
 
-        Tries 500 and 3000 fee tiers and returns the best quote.
+        Tries all standard fee tiers and returns the best quote.
         """
         quoter_addr = SUSHI_V3_QUOTER.get(chain)
         if quoter_addr is None:
@@ -284,7 +284,7 @@ class OnChainMarket:
         amount_in = 10 ** WETH_DECIMALS
 
         best_out = 0
-        for fee in (500, 3000):
+        for fee in (100, 500, 3000, 10000):
             try:
                 result = quoter.functions.quoteExactInputSingle(
                     (

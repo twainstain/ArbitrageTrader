@@ -8,6 +8,7 @@ from collections import defaultdict
 from decimal import Decimal
 from typing import Protocol
 
+from alerting.dispatcher import AlertDispatcher
 from config import BotConfig, PairConfig
 from executor import PaperExecutor
 from log import (
@@ -42,11 +43,13 @@ class ArbitrageBot:
         strategy: ArbitrageStrategy | None = None,
         executor: Executor | None = None,
         pairs: list[PairConfig] | None = None,
+        dispatcher: AlertDispatcher | None = None,
     ) -> None:
         self.config = config
         self.market: MarketSource = market or SimulatedMarket(config)
         self.strategy = strategy or ArbitrageStrategy(config)
         self.executor: Executor = executor or PaperExecutor(config)
+        self.dispatcher = dispatcher or AlertDispatcher()
         # Pairs to scan — passed directly (e.g. from pair_scanner discovery)
         # or falls back to config's primary pair + extra_pairs.
         self._pairs = pairs
@@ -124,6 +127,7 @@ class ArbitrageBot:
                 quotes = self.market.get_quotes()
             except Exception as exc:
                 logger.warning("[scan %d] market error: %s — skipping", index, exc)
+                self.dispatcher.system_error("market", str(exc))
                 continue
 
             # Filter outlier quotes: remove any quote whose mid-price deviates
@@ -152,6 +156,14 @@ class ArbitrageBot:
                 log_scan(logger, index, quotes, None, decision)
             else:
                 opportunities_found += 1
+
+                self.dispatcher.opportunity_found(
+                    pair=opportunity.pair,
+                    buy_dex=opportunity.buy_dex,
+                    sell_dex=opportunity.sell_dex,
+                    spread_pct=float(opportunity.gross_spread_pct),
+                    net_profit=float(opportunity.net_profit_base),
+                )
 
                 if dry_run:
                     decision = "dry_run_skip"
@@ -182,9 +194,15 @@ class ArbitrageBot:
                             "[exec %d] executed, realized profit=%.6f %s",
                             index, float(result.realized_profit_base), self.config.base_asset,
                         )
+                        self.dispatcher.trade_executed(
+                            pair=opportunity.pair,
+                            tx_hash=result.tx_hash or "paper",
+                            profit=float(result.realized_profit_base),
+                        )
                     else:
                         decision = f"skipped:{result.reason}"
                         logger.info("[exec %d] skipped: %s", index, result.reason)
+                        self.dispatcher.system_error("executor", result.reason)
 
                     log_scan(logger, index, quotes, opportunity, decision)
                     log_execution(logger, index, result)
@@ -205,4 +223,11 @@ class ArbitrageBot:
         log_summary(
             logger, mode, total_scans, opportunities_found,
             executed_count, total_realized_profit, self.config.base_asset,
+        )
+        self.dispatcher.daily_summary(
+            scans=total_scans,
+            opportunities=opportunities_found,
+            executed=executed_count,
+            total_profit=float(total_realized_profit),
+            reverts=0,
         )

@@ -55,8 +55,23 @@ def main() -> None:
     parser.add_argument("--onchain", action="store_true",
                         help="Use on-chain RPC quotes (per-DEX) instead of DeFi Llama (aggregated)")
     parser.add_argument("--config", default=None,
-                        help="Config file (default: live_config or multichain_onchain_config)")
+                        help="Config file (default: live_config or multichain_discovery_config)")
+    parser.add_argument("--discover", action="store_true",
+                        help="Run DexScreener discovery first — find best pairs by volume + multi-DEX presence")
     args = parser.parse_args()
+
+    # --- Discovery (per video recommendations) ---
+    if args.discover:
+        from registry.discovery import discover_best_pairs, print_discovery_report
+        logger.info("Running pair discovery (sort by volume, multi-exchange, ERC-20)...")
+        discovered = discover_best_pairs(
+            chains=["ethereum", "arbitrum", "base", "polygon", "optimism", "avalanche"],
+            min_volume=100_000,
+            min_dex_count=2,
+            max_results=15,
+        )
+        print_discovery_report(discovered)
+        logger.info("Discovery complete — %d pairs found", len(discovered))
 
     # --- Init persistence ---
     conn = init_db()
@@ -72,10 +87,32 @@ def main() -> None:
     # --- Pipeline ---
     pipeline = CandidatePipeline(repo=repo, risk_policy=risk_policy)
 
-    # --- Smart Alerting ---
+    # --- Alerting: full dispatcher + smart rules ---
+    from alerting.dispatcher import AlertDispatcher
+    from alerting.telegram import TelegramAlert
+    from alerting.discord import DiscordAlert
+    from alerting.gmail import GmailAlert
     from alerting.smart_alerts import SmartAlerter
+
+    telegram = TelegramAlert()
+    discord = DiscordAlert()
+    gmail = GmailAlert()
+
+    dispatcher = AlertDispatcher()
+    if telegram.configured:
+        dispatcher.add_backend(telegram)
+        logger.info("Alerting: Telegram enabled")
+    if discord.configured:
+        dispatcher.add_backend(discord)
+        logger.info("Alerting: Discord enabled")
+    if gmail.configured:
+        dispatcher.add_backend(gmail)
+        logger.info("Alerting: Gmail enabled")
+    if dispatcher.backend_count == 0:
+        logger.warning("Alerting: no backends configured (set TELEGRAM_BOT_TOKEN, DISCORD_WEBHOOK_URL, or GMAIL_ADDRESS)")
+
     dashboard_url = f"http://localhost:{args.port}/dashboard"
-    alerter = SmartAlerter(repo=repo, dashboard_url=dashboard_url)
+    alerter = SmartAlerter(repo=repo, telegram=telegram, gmail=gmail, dashboard_url=dashboard_url)
     alerter.start_background_hourly()
 
     # --- Dashboard ---
@@ -119,6 +156,7 @@ def main() -> None:
         except Exception as exc:
             logger.error("Market error: %s", exc)
             metrics.record_opportunity_rejected("market_error")
+            dispatcher.system_error("market", str(exc))
             if i < args.iterations:
                 time.sleep(args.sleep)
             continue
