@@ -1,8 +1,8 @@
-"""Smart alerting rules — Telegram/Discord for big wins, hourly email + Discord summary.
+"""Smart alerting rules — Telegram/Discord for big wins, hourly email summary.
 
 Rules:
-  - Spread > 5%: Immediate Telegram + Discord alert
-  - Every hour: Email + Discord aggregate report with dashboard link
+  - Spread > 5%: Immediate Telegram + Discord alert (big wins only)
+  - Every hour: Email-only aggregate report with dashboard link
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ class SmartAlerter:
             logger.info("Discord alert sent for %.2f%% spread on %s", float(spread_pct), pair)
 
     def send_hourly_report(self) -> None:
-        """Send an hourly aggregate report via email and Discord."""
+        """Send an hourly aggregate report via email only (not Discord)."""
         from datetime import datetime, timedelta, timezone
         now = datetime.now(timezone.utc)
         since = (now - timedelta(hours=1)).isoformat()
@@ -96,27 +96,38 @@ class SmartAlerter:
         funnel = self.repo.get_opportunity_funnel()
         pnl = self.repo.get_pnl_summary()
 
+        # Format funnel as readable lines instead of raw dict.
+        funnel_lines = "\n".join(
+            f"  {status}: {count}" for status, count in funnel.items()
+        ) if isinstance(funnel, dict) else f"  {funnel}"
+
+        # Actionable = sim_approved + approved + included (not rejected).
+        actionable_hour = sim_approved + approved + included
+        actionable_pct = f" ({actionable_hour * 100 // total}%)" if total > 0 else ""
+
         msg = (
             f"Hourly Arbitrage Report — {now.strftime('%Y-%m-%d %H:%M UTC')}\n"
             f"{'='*50}\n\n"
             f"Last Hour:\n"
-            f"  Opportunities detected:    {total}\n"
-            f"  Simulation approved:       {sim_approved}\n"
-            f"  Approved (live):           {approved}\n"
-            f"  Rejected:                  {rejected}\n"
-            f"  Dry-run:                   {dry_run}\n"
-            f"  Included on-chain:         {included}\n\n"
-            f"All Time Funnel:\n"
-            f"  {funnel}\n\n"
-            f"PnL Summary:\n"
-            f"  Total profit:  {pnl.get('total_profit', 0)}\n"
-            f"  Successful:    {pnl.get('successful', 0)}\n"
-            f"  Reverted:      {pnl.get('reverted', 0)}\n\n"
+            f"  Detected:            {total}\n"
+            f"  Actionable:          {actionable_hour}{actionable_pct}\n"
+            f"    Sim approved:      {sim_approved}\n"
+            f"    Approved (live):   {approved}\n"
+            f"    Included on-chain: {included}\n"
+            f"  Rejected:            {rejected}\n"
+            f"  Dry-run:             {dry_run}\n\n"
+            f"All Time:\n"
+            f"{funnel_lines}\n\n"
+            f"PnL:\n"
+            f"  Total profit: {pnl.get('total_profit', 0)}\n"
+            f"  Successful:   {pnl.get('successful', 'n/a')}\n"
+            f"  Reverted:     {pnl.get('reverted', 'n/a')}\n\n"
             f"Dashboard: {self.dashboard_url}\n"
         )
 
         details = {
             "last_hour_total": total,
+            "last_hour_actionable": actionable_hour,
             "last_hour_sim_approved": sim_approved,
             "last_hour_approved": approved,
             "last_hour_rejected": rejected,
@@ -128,9 +139,7 @@ class SmartAlerter:
             self.gmail.send("daily_summary", msg, details)
             logger.info("Hourly email report sent")
 
-        if self.discord.configured:
-            self.discord.send("daily_summary", msg, details)
-            logger.info("Hourly Discord report sent")
+        # Hourly summary goes to email only — Discord gets big-win alerts.
 
         self._last_email_at = time.time()
 
