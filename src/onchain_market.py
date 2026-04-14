@@ -151,7 +151,7 @@ class OnChainMarket:
                     urls.append(PUBLIC_RPC_URLS[chain])
                 self._rpc_urls[chain] = urls
                 self._rpc_index[chain] = 0
-                self._w3[chain] = Web3(Web3.HTTPProvider(urls[0]))
+                self._w3[chain] = Web3(Web3.HTTPProvider(urls[0], request_kwargs={"timeout": 8}))
 
     def _rotate_rpc(self, chain: str) -> None:
         """Rotate to the next RPC endpoint for a chain after a failure.
@@ -165,7 +165,7 @@ class OnChainMarket:
         idx = (self._rpc_index.get(chain, 0) + 1) % len(urls)
         self._rpc_index[chain] = idx
         new_url = urls[idx]
-        self._w3[chain] = Web3(Web3.HTTPProvider(new_url))
+        self._w3[chain] = Web3(Web3.HTTPProvider(new_url, request_kwargs={"timeout": 8}))
         _logger.info("RPC failover for %s → %s", chain, new_url[:50])
 
     # ------------------------------------------------------------------
@@ -297,10 +297,19 @@ class OnChainMarket:
                         "Skipping %s on %s: %s",
                         dex.name, dex.chain, exc,  # type: ignore[union-attr]
                     )
-                    # Cache zero-quote / error pairs so we don't retry every scan.
+                    # Use shorter TTL for transient errors (timeout, rate limit)
+                    # so we retry sooner. Permanent errors (zero quotes, thin pool)
+                    # use the default 3h TTL.
+                    err_str = str(exc).lower()
+                    is_transient = any(k in err_str for k in (
+                        "timeout", "timed out", "429", "rate limit",
+                        "connection", "refused", "reset",
+                    ))
+                    ttl = 15 * 60 if is_transient else None  # 15 min or default 3h
                     cache.mark_skip(
                         dex.name, dex.chain or "",  # type: ignore[union-attr]
                         str(exc),
+                        ttl_override=ttl,
                     )
 
         return quotes

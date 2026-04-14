@@ -77,16 +77,22 @@ class LiquidityCache:
             self._total_skips += 1
             return True
 
-    def mark_skip(self, dex: str, chain: str, reason: str) -> None:
-        """Cache a DEX/chain pair as low-liquidity / zero-quote."""
+    def mark_skip(self, dex: str, chain: str, reason: str, ttl_override: float | None = None) -> None:
+        """Cache a DEX/chain pair as low-liquidity / zero-quote.
+
+        Args:
+            ttl_override: Custom TTL in seconds. If None, uses the default.
+                          Use shorter TTL for transient errors (timeout, rate limit).
+        """
         key = self._key(dex, chain)
+        entry_ttl = ttl_override if ttl_override is not None else self._ttl
         with self._lock:
             existing = self._cache.get(key)
             if existing and not existing.expired:
                 return  # Already cached
             self._cache[key] = CacheEntry(
                 dex=dex, chain=chain, reason=reason,
-                cached_at=time.monotonic(), ttl=self._ttl,
+                cached_at=time.monotonic(), ttl=entry_ttl,
             )
         logger.info("Cached skip: %s on %s (%s) — TTL %.0fm",
                      dex, chain, reason, self._ttl / 60)
