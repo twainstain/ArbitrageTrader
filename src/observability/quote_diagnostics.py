@@ -6,11 +6,14 @@ combination.  Thread-safe for use with OnChainMarket's ThreadPoolExecutor.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from enum import Enum
+
+_logger = logging.getLogger(__name__)
 
 
 class QuoteOutcome(Enum):
@@ -80,3 +83,32 @@ class QuoteDiagnostics:
                     ),
                 }
             return result
+
+    def start_periodic_flush(
+        self, repo: object, interval_seconds: float = 300.0,
+    ) -> None:
+        """Start a background thread that flushes snapshots to DB every interval."""
+        self._flush_repo = repo
+        self._flush_interval = interval_seconds
+        self._flush_running = True
+        self._flush_thread = threading.Thread(
+            target=self._flush_loop, daemon=True, name="diag-flush",
+        )
+        self._flush_thread.start()
+        _logger.info("Diagnostics DB flush started (every %.0fs)", interval_seconds)
+
+    def stop_periodic_flush(self) -> None:
+        self._flush_running = False
+
+    def _flush_loop(self) -> None:
+        while getattr(self, "_flush_running", False):
+            time.sleep(self._flush_interval)
+            if not getattr(self, "_flush_running", False):
+                break
+            try:
+                snap = self.snapshot()
+                if snap:
+                    count = self._flush_repo.save_diagnostics_snapshot(snap)  # type: ignore[union-attr]
+                    _logger.debug("Diagnostics flushed: %d entries", count)
+            except Exception as exc:
+                _logger.warning("Diagnostics flush failed: %s", exc)

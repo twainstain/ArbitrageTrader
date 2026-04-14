@@ -337,11 +337,30 @@ class EventDrivenScanner:
                     continue
                 # Find best same-chain opportunity using the full cost model.
                 chain_opp = self._chain_strategy.find_best_opportunity(chain_quotes)
-                if chain_opp is not None:
-                    score = float(chain_opp.net_profit_base) * 0.5
-                    if self.queue.push(chain_opp, priority=score, scan_marks=scan_marks):
-                        pushed += 1
-                        self.metrics.record_opportunity_detected()
+                if chain_opp is None:
+                    continue
+                # Duplicate the scanner's liquidity filter here because the
+                # same-chain strategy pass bypasses scanner._find_all_opportunities.
+                # Without this, thin-pool false positives (e.g., Camelot WETH/USDT
+                # with $0 liquidity vs. Uniswap $22M) would reach the pipeline.
+                # See scanner.py _find_all_opportunities for the full rationale.
+                buy_liq = chain_opp.buy_liquidity_usd
+                sell_liq = chain_opp.sell_liquidity_usd
+                min_liq = min(buy_liq, sell_liq)
+                max_liq = max(buy_liq, sell_liq)
+                if min_liq > D("0") and min_liq < D("1000000"):
+                    continue
+                if min_liq == D("0") and max_liq > D("0"):
+                    continue
+                # Same-chain opportunities get 0.5x priority vs. cross-DEX scanner
+                # results (which get full net_profit as priority).  This deprioritizes
+                # same-chain because they're often the same opportunity found by both
+                # the scanner and the chain-grouping pass — the scanner version has
+                # better ranking metadata.
+                score = float(chain_opp.net_profit_base) * 0.5
+                if self.queue.push(chain_opp, priority=score, scan_marks=scan_marks):
+                    pushed += 1
+                    self.metrics.record_opportunity_detected()
 
             if pushed > 0:
                 logger.info(
@@ -478,6 +497,7 @@ def main() -> None:
     # --- Quote diagnostics ---
     from observability.quote_diagnostics import QuoteDiagnostics
     diagnostics = QuoteDiagnostics()
+    diagnostics.start_periodic_flush(repo, interval_seconds=300.0)
 
     # --- Market ---
     market = OnChainMarket(config, rpc_overrides=rpc or None, pairs=all_pairs, diagnostics=diagnostics)

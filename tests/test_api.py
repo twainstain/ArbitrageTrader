@@ -173,12 +173,16 @@ class AggregationEndpointTests(_APITestBase):
         self.assertEqual(data["last_discovery_pair_count"], 7)
         self.assertEqual(data["last_monitored_pools_synced"], 3)
 
-    def test_dashboard_html_includes_operations_section(self):
+    def test_dashboard_html_links_to_ops(self):
         resp = self.client.get("/dashboard")
         self.assertEqual(resp.status_code, 200)
-        body = resp.text
-        self.assertIn('id="operations-grid"', body)
-        self.assertIn("fetchJSON('/operations')", body)
+        self.assertIn('ops', resp.text)
+
+    def test_ops_dashboard_loads(self):
+        resp = self.client.get("/ops")
+        self.assertEqual(resp.status_code, 200)
+        self.assertIn('id="dex-table"', resp.text)
+        self.assertIn("fetchJSON('/diagnostics/quotes')", resp.text)
 
 
 class PauseEndpointTests(_APITestBase):

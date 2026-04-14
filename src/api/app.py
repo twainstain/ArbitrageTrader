@@ -361,6 +361,14 @@ def create_app(
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
         )
 
+    @app.get("/ops", response_class=HTMLResponse)
+    def ops_dashboard():
+        from api.dashboard import OPS_DASHBOARD_HTML
+        return HTMLResponse(
+            content=OPS_DASHBOARD_HTML,
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
+
     @app.get("/dashboard/window/{window_key}")
     def dashboard_window(window_key: str, chain: Optional[str] = None):
         from observability.time_windows import get_windowed_stats

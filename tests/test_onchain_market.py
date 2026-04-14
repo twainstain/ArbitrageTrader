@@ -686,5 +686,133 @@ class FeeTierCacheTests(unittest.TestCase):
         self.assertEqual(call_count, 4)  # All tiers retried
 
 
+class OnChainMarketCurveTests(unittest.TestCase):
+    @patch("onchain_market.Web3")
+    def test_curve_get_dy_returns_price(self, mock_web3_cls) -> None:
+        config = BotConfig(
+            pair="USDT/USDC", base_asset="USDT", quote_asset="USDC",
+            trade_size=1000.0, min_profit_base=0.0, estimated_gas_cost_base=0.0,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=10.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="Curve-Ethereum", base_price=0, fee_bps=4.0,
+                          volatility_bps=0, chain="ethereum", dex_type="curve"),
+                DexConfig(name="Uniswap-Ethereum", base_price=0, fee_bps=5.0,
+                          volatility_bps=0, chain="ethereum", dex_type="uniswap_v3"),
+            ],
+        )
+        config.validate()
+
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+
+        pool = MagicMock()
+        # 1000 USDT (6 decimals) → ~999.5 USDC (after ~0.04% fee)
+        pool.functions.get_dy.return_value.call.return_value = 999_500_000
+        mock_w3.eth.contract.return_value = pool
+
+        market = OnChainMarket(config)
+        market._w3 = {"ethereum": mock_w3}
+
+        from decimal import Decimal as D
+        price, fee_bps = market._quote_curve("ethereum", "USDT", "USDC")
+        self.assertAlmostEqual(float(price), 999.5, delta=1.0)
+        self.assertEqual(fee_bps, D("4"))
+
+    @patch("onchain_market.Web3")
+    def test_curve_raises_for_unknown_pair(self, mock_web3_cls) -> None:
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.0, estimated_gas_cost_base=0.0,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=10.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="Curve-Ethereum", base_price=0, fee_bps=4.0,
+                          volatility_bps=0, chain="ethereum", dex_type="curve"),
+                DexConfig(name="Uniswap-Ethereum", base_price=0, fee_bps=5.0,
+                          volatility_bps=0, chain="ethereum", dex_type="uniswap_v3"),
+            ],
+        )
+        config.validate()
+
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        market = OnChainMarket(config)
+
+        with self.assertRaises(OnChainMarketError):
+            market._quote_curve("ethereum", "WETH", "LINK")
+
+
+class OnChainMarketTraderJoeTests(unittest.TestCase):
+    @patch("onchain_market.Web3")
+    def test_traderjoe_lb_returns_price(self, mock_web3_cls) -> None:
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.0, estimated_gas_cost_base=0.0,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=10.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="TraderJoe-Avax", base_price=0, fee_bps=15.0,
+                          volatility_bps=0, chain="avax", dex_type="traderjoe_lb"),
+                DexConfig(name="Uniswap-Avax", base_price=0, fee_bps=5.0,
+                          volatility_bps=0, chain="avax", dex_type="uniswap_v3"),
+            ],
+        )
+        config.validate()
+
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+
+        quoter = MagicMock()
+        # Result tuple: (route, pairs, binSteps, versions, amounts, virtualAmounts, fees)
+        quoter.functions.findBestPathFromAmountIn.return_value.call.return_value = (
+            ["0xa", "0xb"],  # route
+            ["0xpair"],       # pairs
+            [20],             # binSteps
+            [2],              # versions (V2.1)
+            [10**18, 2300 * 10**6],  # amounts (input, output)
+            [10**18, 2302 * 10**6],  # virtualAmountsWithoutSlippage
+            [100000],         # fees
+        )
+        mock_w3.eth.contract.return_value = quoter
+
+        market = OnChainMarket(config)
+        market._w3 = {"avax": mock_w3}
+
+        from decimal import Decimal as D
+        price, fee_bps = market._quote_traderjoe_lb(
+            "avax", "0xweth", "0xusdc", "WETH", "USDC",
+        )
+        self.assertEqual(price, D("2300"))
+        self.assertEqual(fee_bps, D("15"))
+
+    @patch("onchain_market.Web3")
+    def test_traderjoe_raises_for_unknown_chain(self, mock_web3_cls) -> None:
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.0, estimated_gas_cost_base=0.0,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=10.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="TraderJoe-Polygon", base_price=0, fee_bps=15.0,
+                          volatility_bps=0, chain="polygon", dex_type="traderjoe_lb"),
+                DexConfig(name="Uniswap-Polygon", base_price=0, fee_bps=5.0,
+                          volatility_bps=0, chain="polygon", dex_type="uniswap_v3"),
+            ],
+        )
+        config.validate()
+
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        market = OnChainMarket(config)
+
+        with self.assertRaises(OnChainMarketError):
+            market._quote_traderjoe_lb("polygon", "0xa", "0xb", "WETH", "USDC")
+
+
 if __name__ == "__main__":
     unittest.main()

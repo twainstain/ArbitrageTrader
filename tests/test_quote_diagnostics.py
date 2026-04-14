@@ -79,6 +79,32 @@ class QuoteDiagnosticsTests(unittest.TestCase):
         snap = diag.snapshot()
         self.assertEqual(snap["Velo:optimism:OP/USDC"]["last_error"], "zero returned")
 
+    def test_db_persistence(self) -> None:
+        """Verify snapshot can be persisted to DB via repository."""
+        import tempfile
+        diag = QuoteDiagnostics()
+        diag.record("Uniswap", "ethereum", "WETH/USDC", QuoteOutcome.SUCCESS, latency_ms=50.0)
+        diag.record("Sushi", "arbitrum", "WETH/USDC", QuoteOutcome.ERROR, error_msg="timeout")
+
+        from persistence.db import init_db, close_db
+        from persistence.repository import Repository
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        try:
+            conn = init_db(tmp.name)
+            repo = Repository(conn)
+            snap = diag.snapshot()
+            count = repo.save_diagnostics_snapshot(snap)
+            self.assertEqual(count, 2)
+
+            # Verify rows in DB.
+            rows = conn.execute("SELECT * FROM quote_diagnostics").fetchall()
+            self.assertEqual(len(rows), 2)
+        finally:
+            close_db()
+            from pathlib import Path
+            Path(tmp.name).unlink(missing_ok=True)
+
     def test_cached_skip_tracked(self) -> None:
         diag = QuoteDiagnostics()
         diag.record("Sushi", "base", "WETH/USDC", QuoteOutcome.CACHED_SKIP)

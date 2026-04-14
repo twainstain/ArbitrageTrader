@@ -139,11 +139,35 @@ class OpportunityScanner:
                 if opp.is_cross_chain:
                     skipped_cross_chain += 1
                     continue
-                # Skip if either pool has low estimated liquidity.
-                # $1M minimum ensures pools can absorb flash loan trade sizes
-                # without massive slippage. Pools below this produce fake spreads.
-                min_liq = min(buy_quote.liquidity_usd, sell_quote.liquidity_usd)
+                # --- Liquidity filter (3 cases) ---
+                #
+                # Why $1M: a 1 WETH flash loan (~$2300) in a $50K pool has
+                # ~4.6% price impact, which eats the entire spread.  $1M
+                # keeps impact below ~0.1% for our trade sizes.  Derived
+                # from constant-product math: impact ≈ trade_size / TVL.
+                #
+                # Case 1: Both sides report liquidity, but one is thin.
+                #   Example: Uniswap $22M, Camelot $50K → reject.
+                #
+                # Case 2: One side reports liquidity, the other returns 0
+                #   (estimation failed — e.g., Algebra quoter can't handle
+                #   small amounts).  Asymmetric data = unreliable spread.
+                #   This catches the Camelot WETH/USDT false positive where
+                #   Camelot returns $0 liquidity but Uniswap returns $22M.
+                #
+                # Case 3: BOTH sides are 0.  We let these through because
+                #   both quoters failed equally — we can't tell if the pool
+                #   is thin or if the estimation just doesn't work for this
+                #   DEX type.  The outlier filter and strategy warning flags
+                #   provide secondary protection.
+                buy_liq = buy_quote.liquidity_usd
+                sell_liq = sell_quote.liquidity_usd
+                min_liq = min(buy_liq, sell_liq)
+                max_liq = max(buy_liq, sell_liq)
                 if min_liq > ZERO and min_liq < D("1000000"):
+                    skipped_low_liq += 1
+                    continue
+                if min_liq == ZERO and max_liq > ZERO:
                     skipped_low_liq += 1
                     continue
                 results.append(opp)
@@ -158,17 +182,26 @@ class OpportunityScanner:
         return results
 
     def _composite_score(self, opp: Opportunity) -> float:
-        """Compute a multi-factor ranking score.
+        """Compute a multi-factor ranking score for opportunity prioritization.
 
-        Weights rationale:
-          - 0.50 net profit: primary signal — we're here to make money
-          - 0.25 liquidity:  second most important — illiquid pools give false signals
-          - 0.15 flag safety: penalize stale/risky opportunities
-          - 0.10 spread:     tie-breaker — wider raw spread = more room for error
+        Weights were set based on initial production observations (not ML-tuned):
+          - 0.50 net profit: primary signal — profit is the objective function
+          - 0.25 liquidity:  guards against thin-pool false positives; pools with
+            $10M+ TVL get full score, $100K gets ~0.71 (see strategy.py log10 scaling)
+          - 0.15 flag safety: each warning flag (stale_quote, low_liquidity, etc.)
+            reduces this component by 0.25.  4+ flags = zero.  This is aggressive
+            because multiple flags compound risk in ways a weighted average can't capture.
+          - 0.10 spread: tie-breaker only — wider spread = more room for execution
+            slippage before the trade becomes unprofitable
 
-        Normalization caps:
-          - Profit capped at 1.0 WETH (~$2300) — prevents one outlier from dominating
-          - Spread capped at 5% — above this, likely a data error or illiquid pool
+        Normalization caps prevent outliers from dominating the ranking:
+          - Profit capped at 1.0 WETH (~$2300): a $10K profit opportunity is
+            ranked the same as $2300 — both are "very profitable", the ranking
+            should prioritize execution reliability over extreme profit
+          - Spread capped at 5%: above this is almost certainly a data error
+            or an illiquid pool that would get filtered anyway
+
+        These weights should be re-tuned after collecting 1000+ real trades.
 
         Returns float — this is a ranking metric, not a financial value.
         """

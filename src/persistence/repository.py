@@ -281,6 +281,30 @@ class Repository:
             )
         self.conn.commit()
 
+    def save_diagnostics_snapshot(self, snapshot: dict[str, dict]) -> int:
+        """Persist a QuoteDiagnostics snapshot to DB for historical trending."""
+        now = _now()
+        inserted = 0
+        for key, data in snapshot.items():
+            parts = key.split(":", 2)
+            if len(parts) != 3:
+                continue
+            dex, chain, pair = parts
+            self.conn.execute(
+                "INSERT INTO quote_diagnostics "
+                "(dex, chain, pair, success_count, total_count, avg_latency_ms, "
+                "last_outcome, last_error, snapshot_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (dex, chain, pair,
+                 data.get("success_count", 0), data.get("total_quotes", 0),
+                 data.get("avg_latency_ms", 0.0),
+                 data.get("last_outcome", ""), data.get("last_error", "") or "",
+                 now),
+            )
+            inserted += 1
+        self.conn.commit()
+        return inserted
+
     def get_checkpoint(self, checkpoint_type: str) -> str | None:
         row = self.conn.execute(
             "SELECT value FROM system_checkpoints WHERE checkpoint_type = ?",

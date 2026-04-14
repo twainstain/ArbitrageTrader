@@ -135,14 +135,26 @@ class ArbitrageStrategy:
         buy_cost_quote = trade_size * buy_quote.buy_price
         sell_proceeds_quote = trade_size * sell_quote.sell_price
 
-        # Buy side: if fees are already included in the quoted price, the
-        # cost IS buy_cost_quote.  Otherwise gross up for the DEX fee.
+        # --- Fee handling (critical: prevents double-counting) ---
+        #
+        # On-chain quoters (Uniswap V3 quoteExactInputSingle, etc.) return
+        # the output amount AFTER the pool fee has been deducted.  So the
+        # quoted price already reflects the fee → fee_included=True.
+        #
+        # Simulated/DeFi Llama prices do NOT include fees → fee_included=False,
+        # so we must manually gross up (buy side) or reduce (sell side).
+        #
+        # If we applied fee math to an already-fee-included price, we'd
+        # deduct fees twice, making every opportunity look ~60 bps worse
+        # than it really is.  See commit a591ce2 ("feat: add fee_included flag").
+        #
+        # Buy side: gross up to find actual cost including fee.
         if buy_quote.fee_included:
             buy_cost_with_fee = buy_cost_quote
         else:
             buy_cost_with_fee = buy_cost_quote / (ONE - buy_quote.fee_bps / BPS_DIVISOR)
 
-        # Sell side: if fees are already included, proceeds are final.
+        # Sell side: reduce proceeds by fee.
         if sell_quote.fee_included:
             sell_proceeds_after_fee = sell_proceeds_quote
         else:
@@ -169,10 +181,17 @@ class ArbitrageStrategy:
             - flash_fee_quote
         )
 
-        # Convert quote-denominated profit to base asset using the average of the
-        # two prices as a rough conversion rate, then subtract gas cost in base.
-        # NOTE: Mid-price averaging is a simplification. In production with large
-        # trades, use the actual execution price from the quoter instead.
+        # Convert quote-denominated profit (USDC) to base asset (WETH) using
+        # the arithmetic mean of buy and sell prices as a conversion rate.
+        #
+        # Why arithmetic mean: for small spreads (<5%), arithmetic and geometric
+        # means differ by <0.01%.  For the Camelot 2.2% false positive case,
+        # the difference is $0.25 on a $2300 trade — negligible vs. other
+        # estimation errors (slippage, gas).
+        #
+        # Limitation: if buy=$2000 and sell=$3000 (50% spread — almost certainly
+        # a data error), the $2500 midpoint introduces ~10% conversion error.
+        # The scanner's 5% spread cap and outlier filter prevent this case.
         mid_price = (buy_quote.buy_price + sell_quote.sell_price) / D("2")
         net_profit_base = (net_profit_quote / mid_price) - self.config.estimated_gas_cost_base
 
@@ -203,12 +222,22 @@ class ArbitrageStrategy:
         else:
             dex_fee_cost_quote = (buy_cost_with_fee - buy_cost_quote) + (sell_proceeds_quote - sell_proceeds_after_fee)
 
-        # --- Risk flag assessment (per scanner doc warning flags) ---
-        # Thresholds are empirically derived from DeFi market conditions:
-        #   $100K = pools below this have frequent large price impact
-        #   $50K  = 24h volume below this means the pair is barely traded
-        #   60s   = quotes older than 1 minute may not reflect current state
-        #   80%   = if fees eat >80% of the gross spread, the edge is too thin
+        # --- Risk flag assessment ---
+        # Each flag is a soft warning (used for ranking), not a hard veto.
+        # Hard vetoes happen in scanner._find_all_opportunities ($1M TVL filter).
+        #
+        # Thresholds and rationale:
+        #   $100K liquidity: at this TVL, a 1 WETH trade has ~2.3% price impact
+        #     (constant-product math).  Most "opportunities" at this level are
+        #     thin-pool false positives, not real arb.
+        #   $50K  24h volume: below this the pair is barely traded — wide spreads
+        #     may persist but can't be executed because there's no counterparty.
+        #   60s   quote age: Ethereum blocks every ~12s, so a 60s-old quote
+        #     is 5 blocks stale.  Prices can move 1-2% in that time during
+        #     volatile periods (liquidations, large swaps).
+        #   80%   fee ratio: if DEX fees + flash loan + slippage consume 80%+
+        #     of the gross spread, the remaining 20% is too thin to survive
+        #     execution variance (gas spikes, MEV, additional slippage).
         flags: list[str] = []
 
         min_liq = min(buy_quote.liquidity_usd, sell_quote.liquidity_usd)

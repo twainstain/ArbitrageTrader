@@ -86,13 +86,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <h2>System Status</h2>
     <div class="grid" id="status-grid"></div>
 
-    <!-- Operational Status -->
-    <h2>Operations</h2>
-    <div class="grid" id="operations-grid"></div>
-
-    <!-- DEX Health -->
-    <h2>DEX Health</h2>
-    <div class="grid" id="dex-health-grid"></div>
+    <!-- Link to Ops -->
+    <div style="margin:12px 0"><a href="ops" class="tab" style="text-decoration:none">Operations &amp; DEX Health &rarr;</a></div>
 
     <!-- Chain Filter + Time Window Tabs -->
     <h2>Performance</h2>
@@ -180,12 +175,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function loadStatus() {
-        const [health, exec, pause, metrics, pnl, operations] = await Promise.all([
+        const [health, exec, pause, metrics, pnl] = await Promise.all([
             fetchJSON('/health'), fetchJSON('/execution'), fetchJSON('/pause'),
-            fetchJSON('/metrics'), fetchJSON('/pnl'), fetchJSON('/operations'),
+            fetchJSON('/metrics'), fetchJSON('/pnl'),
         ]);
         const grid = document.getElementById('status-grid');
-        const opsGrid = document.getElementById('operations-grid');
         grid.innerHTML = `
             <div class="card">
                 <div class="card-title">Execution</div>
@@ -216,48 +210,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <div class="card-sub">P95: ${metrics.p95_latency_ms}ms</div>
             </div>
         `;
-        opsGrid.innerHTML = `
-            <div class="card">
-                <div class="card-title">DB Backend</div>
-                <div class="card-value">${operations.db_backend || 'unknown'}</div>
-            </div>
-            <div class="card">
-                <div class="card-title">Discovered Pairs</div>
-                <div class="card-value">${operations.discovered_pairs_count || 0}</div>
-                <div class="card-sub">Last refresh snapshot: ${operations.last_discovery_pair_count || 0}</div>
-            </div>
-            <div class="card">
-                <div class="card-title">Discovery Source</div>
-                <div class="card-value">${operations.discovery_snapshot_source || 'unknown'}</div>
-                <div class="card-sub">Background refresh state</div>
-            </div>
-            <div class="card">
-                <div class="card-title">Enabled Pools</div>
-                <div class="card-value">${operations.enabled_pools_total || 0}</div>
-                <div class="card-sub">Last sync inserted: ${operations.last_monitored_pools_synced || 0}</div>
-            </div>
-        `;
-
-        // DEX Health
-        try {
-            const diag = await fetchJSON('/diagnostics/quotes');
-            const healthGrid = document.getElementById('dex-health-grid');
-            const dexes = diag.dexes || {};
-            if (Object.keys(dexes).length === 0) {
-                healthGrid.innerHTML = '<div class="card"><div class="card-title">No data yet</div></div>';
-            } else {
-                healthGrid.innerHTML = Object.entries(dexes).map(([dex, entries]) => {
-                    const bestRate = Math.max(...entries.map(e => e.success_rate || 0));
-                    const statusCls = bestRate >= 0.8 ? 'tag-approved' : bestRate >= 0.3 ? 'tag-detected' : 'tag-rejected';
-                    const avgLat = entries.reduce((s, e) => s + (e.avg_latency_ms || 0), 0) / entries.length;
-                    return `<div class="card">
-                        <div class="card-title">${dex}</div>
-                        <div class="card-value"><span class="tag ${statusCls}">${(bestRate*100).toFixed(0)}%</span></div>
-                        <div class="card-sub">${entries.length} pair(s), avg ${avgLat.toFixed(0)}ms</div>
-                    </div>`;
-                }).join('');
-            }
-        } catch(e) { console.warn('DEX health fetch failed:', e); }
     }
 
     async function loadWindows() {
@@ -695,6 +647,249 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
         document.getElementById('content').innerHTML = html;
     }
     load();
+    </script>
+</body>
+</html>"""
+
+
+OPS_DASHBOARD_HTML = """<!DOCTYPE html>
+<html>
+<head>
+    <title>Ops &amp; Diagnostics</title>
+    <meta http-equiv="refresh" content="30">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
+               background: #0d1117; color: #c9d1d9; padding: 20px; }
+        h1 { color: #58a6ff; margin-bottom: 4px; }
+        h2 { color: #8b949e; margin: 24px 0 10px; font-size: 14px; text-transform: uppercase; }
+        a { color: #58a6ff; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+        .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
+        .card-title { font-size: 12px; color: #8b949e; text-transform: uppercase; margin-bottom: 8px; }
+        .card-value { font-size: 28px; font-weight: bold; color: #f0f6fc; }
+        .card-sub { font-size: 12px; color: #8b949e; margin-top: 4px; }
+        .status-ok { color: #3fb950; }
+        .status-warn { color: #d29922; }
+        .status-bad { color: #f85149; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th { text-align: left; padding: 8px; border-bottom: 2px solid #30363d; color: #8b949e;
+             font-size: 12px; text-transform: uppercase; cursor: pointer; }
+        th:hover { color: #58a6ff; }
+        td { padding: 8px; border-bottom: 1px solid #21262d; font-size: 13px; }
+        tr:hover { background: #1c2128; }
+        .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
+        .tag-ok { background: #23863533; color: #3fb950; }
+        .tag-warn { background: #9e6a0333; color: #d29922; }
+        .tag-bad { background: #da362933; color: #f85149; }
+        .trend-bar { display: inline-block; height: 14px; border-radius: 3px; vertical-align: middle; }
+        .mini-chart { display: flex; align-items: flex-end; gap: 2px; height: 40px; }
+        .mini-bar { flex: 1; min-width: 3px; max-width: 8px; border-radius: 2px 2px 0 0; }
+    </style>
+</head>
+<body>
+    <a href="dashboard">&larr; Back to Dashboard</a>
+    <h1>Operations &amp; Diagnostics</h1>
+
+    <!-- Infrastructure -->
+    <h2>Infrastructure</h2>
+    <div class="grid" id="infra-grid"></div>
+
+    <!-- RPC Health -->
+    <h2>RPC Endpoints</h2>
+    <div class="grid" id="rpc-grid"></div>
+
+    <!-- DEX Health Table -->
+    <h2>DEX Health (per pair)</h2>
+    <table id="dex-table">
+        <thead><tr>
+            <th>DEX</th><th>Chain</th><th>Pair</th>
+            <th>Success Rate</th><th>Quotes</th>
+            <th>Avg Latency</th><th>Last Outcome</th><th>Last Error</th>
+        </tr></thead>
+        <tbody></tbody>
+    </table>
+
+    <!-- Metrics Trend -->
+    <h2>Scan Metrics</h2>
+    <div class="grid" id="metrics-grid"></div>
+
+    <!-- Risk Policy -->
+    <h2>Risk Policy</h2>
+    <div class="grid" id="risk-grid"></div>
+
+    <script>
+    const API_BASE = window.location.pathname.split('/ops')[0];
+
+    async function fetchJSON(url) {
+        const r = await fetch(API_BASE + url);
+        return r.json();
+    }
+
+    async function loadInfra() {
+        const ops = await fetchJSON('/operations');
+        document.getElementById('infra-grid').innerHTML = `
+            <div class="card">
+                <div class="card-title">DB Backend</div>
+                <div class="card-value">${ops.db_backend || 'unknown'}</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Discovered Pairs</div>
+                <div class="card-value">${ops.discovered_pairs_count || 0}</div>
+                <div class="card-sub">Snapshot: ${ops.last_discovery_pair_count || 0} pairs</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Discovery Source</div>
+                <div class="card-value">${ops.discovery_snapshot_source || 'none'}</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Enabled Pools</div>
+                <div class="card-value">${ops.enabled_pools_total || 0}</div>
+                <div class="card-sub">Last sync: ${ops.last_monitored_pools_synced || 0} inserted</div>
+            </div>
+        `;
+    }
+
+    async function loadDexHealth() {
+        try {
+            const diag = await fetchJSON('/diagnostics/quotes');
+            const dexes = diag.dexes || {};
+
+            // RPC summary cards — group by chain
+            const chainHealth = {};
+            for (const [dex, entries] of Object.entries(dexes)) {
+                for (const e of entries) {
+                    const parts = e.key.split(':');
+                    const chain = parts[1] || '?';
+                    if (!chainHealth[chain]) chainHealth[chain] = { ok: 0, fail: 0, total: 0, latencies: [] };
+                    chainHealth[chain].total += e.total_quotes;
+                    chainHealth[chain].ok += e.success_count;
+                    chainHealth[chain].fail += e.total_quotes - e.success_count;
+                    if (e.avg_latency_ms > 0) chainHealth[chain].latencies.push(e.avg_latency_ms);
+                }
+            }
+            const rpcGrid = document.getElementById('rpc-grid');
+            rpcGrid.innerHTML = Object.entries(chainHealth).sort((a,b) => b[1].total - a[1].total).map(([chain, h]) => {
+                const rate = h.total > 0 ? h.ok / h.total : 0;
+                const avgLat = h.latencies.length > 0 ? h.latencies.reduce((a,b)=>a+b,0)/h.latencies.length : 0;
+                const cls = rate >= 0.8 ? 'tag-ok' : rate >= 0.3 ? 'tag-warn' : 'tag-bad';
+                const barW = Math.round(rate * 100);
+                const barColor = rate >= 0.8 ? '#3fb950' : rate >= 0.3 ? '#d29922' : '#f85149';
+                return `<div class="card">
+                    <div class="card-title">${chain}</div>
+                    <div class="card-value"><span class="tag ${cls}">${(rate*100).toFixed(0)}%</span></div>
+                    <div style="margin:8px 0;background:#21262d;border-radius:4px;height:14px">
+                        <div class="trend-bar" style="width:${barW}%;background:${barColor}"></div>
+                    </div>
+                    <div class="card-sub">${h.ok}/${h.total} quotes OK | avg ${avgLat.toFixed(0)}ms</div>
+                </div>`;
+            }).join('');
+
+            // Detailed DEX table
+            const rows = [];
+            for (const [dex, entries] of Object.entries(dexes)) {
+                for (const e of entries) {
+                    const parts = e.key.split(':');
+                    rows.push({ dex, chain: parts[1]||'?', pair: parts[2]||'?', ...e });
+                }
+            }
+            rows.sort((a,b) => a.success_rate - b.success_rate);
+
+            const tbody = document.querySelector('#dex-table tbody');
+            tbody.innerHTML = rows.map(r => {
+                const cls = r.success_rate >= 0.8 ? 'tag-ok' : r.success_rate >= 0.3 ? 'tag-warn' : 'tag-bad';
+                const outCls = r.last_outcome === 'success' ? 'status-ok' :
+                               r.last_outcome === 'cached_skip' ? 'status-warn' : 'status-bad';
+                return `<tr>
+                    <td><b>${r.dex}</b></td>
+                    <td>${r.chain}</td>
+                    <td>${r.pair}</td>
+                    <td><span class="tag ${cls}">${(r.success_rate*100).toFixed(0)}%</span></td>
+                    <td>${r.success_count}/${r.total_quotes}</td>
+                    <td>${r.avg_latency_ms > 0 ? r.avg_latency_ms.toFixed(0)+'ms' : '-'}</td>
+                    <td class="${outCls}">${r.last_outcome || '-'}</td>
+                    <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;color:#8b949e;font-size:11px">${r.last_error || '-'}</td>
+                </tr>`;
+            }).join('');
+
+        } catch(e) { console.warn('DEX health load failed:', e); }
+    }
+
+    async function loadMetrics() {
+        const m = await fetchJSON('/metrics');
+        const grid = document.getElementById('metrics-grid');
+        const upH = (m.uptime_seconds / 3600).toFixed(1);
+        grid.innerHTML = `
+            <div class="card">
+                <div class="card-title">Uptime</div>
+                <div class="card-value">${upH}h</div>
+                <div class="card-sub">${Math.round(m.uptime_seconds)}s</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Opportunities / min</div>
+                <div class="card-value">${m.opportunities_per_minute}</div>
+                <div class="card-sub">${m.opportunities_detected} total detected</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Rejected</div>
+                <div class="card-value">${m.opportunities_rejected}</div>
+                <div class="card-sub">${Object.entries(m.rejection_reasons || {}).map(([k,v]) => k+': '+v).join(', ') || 'none'}</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Avg Pipeline Latency</div>
+                <div class="card-value">${m.avg_latency_ms}ms</div>
+                <div class="card-sub">P95: ${m.p95_latency_ms}ms</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Executions</div>
+                <div class="card-value">${m.executions_submitted}</div>
+                <div class="card-sub">Included: ${m.executions_included} | Reverted: ${m.executions_reverted}</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Total Expected Profit</div>
+                <div class="card-value ${m.total_expected_profit > 0 ? 'status-ok' : ''}">${Number(m.total_expected_profit).toFixed(6)} ETH</div>
+                <div class="card-sub">~$${(m.total_expected_profit * 2300).toFixed(2)}</div>
+            </div>
+        `;
+    }
+
+    async function loadRiskPolicy() {
+        const r = await fetchJSON('/risk/policy');
+        const grid = document.getElementById('risk-grid');
+        grid.innerHTML = `
+            <div class="card">
+                <div class="card-title">Min Net Profit</div>
+                <div class="card-value">${Number(r.min_net_profit).toFixed(4)} ETH</div>
+                <div class="card-sub">~$${(Number(r.min_net_profit) * 2300).toFixed(2)}</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Min Spread</div>
+                <div class="card-value">${r.min_spread_pct}%</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Max Slippage</div>
+                <div class="card-value">${r.max_slippage_bps} bps</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Min Liquidity</div>
+                <div class="card-value">$${Number(r.min_liquidity_usd).toLocaleString()}</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Max Quote Age</div>
+                <div class="card-value">${r.max_quote_age_seconds}s</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Execution</div>
+                <div class="card-value ${r.execution_enabled ? 'status-ok' : 'status-warn'}">${r.execution_enabled ? 'LIVE' : 'SIMULATION'}</div>
+            </div>
+        `;
+    }
+
+    async function init() {
+        await Promise.all([loadInfra(), loadDexHealth(), loadMetrics(), loadRiskPolicy()]);
+    }
+    init();
     </script>
 </body>
 </html>"""

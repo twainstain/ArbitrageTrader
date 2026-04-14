@@ -32,6 +32,9 @@ from contracts import (
     BALANCER_VAULT,
     BALANCER_VAULT_ABI,
     CAMELOT_QUOTER,
+    CURVE_POOL_ABI,
+    CURVE_POOLS,
+    CURVE_TOKEN_INDEX,
     PANCAKE_V3_QUOTER,
     PANCAKE_V3_QUOTER_ABI,
     PUBLIC_RPC_URLS,
@@ -43,6 +46,8 @@ from contracts import (
     UNISWAP_V3_QUOTER_ABI,
     UNISWAP_V3_QUOTER_PER_CHAIN,
     UNISWAP_V3_QUOTER_V2,
+    TRADERJOE_LB_QUOTER,
+    TRADERJOE_LB_QUOTER_ABI,
     VELO_FACTORY,
     VELO_ROUTER_ABI,
     VELODROME_ROUTER,
@@ -68,7 +73,7 @@ TWO = D("2")
 
 SUPPORTED_DEX_TYPES = (
     "uniswap_v3", "sushi_v3", "pancakeswap_v3", "balancer_v2", "quickswap_v3",
-    "camelot_v3", "velodrome_v2", "aerodrome",
+    "camelot_v3", "velodrome_v2", "aerodrome", "curve", "traderjoe_lb",
 )
 
 STABLE_SYMBOLS = frozenset({"USDC", "USDT", "DAI"})
@@ -87,14 +92,23 @@ def _validate_price(
     base_symbol: str,
     quote_symbol: str,
 ) -> Decimal:
-    """Reject quotes that are obviously wrong for the pair being scanned."""
+    """Reject quotes that are obviously wrong for the pair being scanned.
+
+    These bounds catch decimal/unit bugs (e.g., BSC returning $2.3 quadrillion
+    for WETH because of a wei/token confusion) and broken oracle feeds.
+    The tiers are intentionally wide — they're safety nets, not precision filters.
+    Fine-grained quality is handled by the outlier filter and liquidity estimation.
+    """
     if price <= 0:
         raise OnChainMarketError(f"{dex} on {chain} returned non-positive quote for {pair_name}.")
 
     base = base_symbol.upper()
     quote = quote_symbol.upper()
 
-    # Stable/stable pools should stay close to parity.
+    # Stable/stable (e.g., USDC/USDT): should trade within 0.5–2.0.
+    # In practice peg stays 0.99–1.01, but we allow wide range to
+    # accommodate depeg events (e.g., USDC in Mar 2023 hit ~$0.87).
+    # Anything outside 0.5–2.0 is a unit error, not a real depeg.
     if base in STABLE_SYMBOLS and quote in STABLE_SYMBOLS:
         if price < D("0.5") or price > D("2"):
             raise OnChainMarketError(
@@ -102,7 +116,8 @@ def _validate_price(
             )
         return price
 
-    # Major tokens quoted in stablecoins should be positive but can span a wide range.
+    # Major/stable (e.g., WETH/USDC): no token should be worth >$1M.
+    # BTC ATH ~$100K, ETH ATH ~$5K — $1M gives 10-200x headroom.
     if quote in STABLE_SYMBOLS and base in MAJOR_SYMBOLS:
         if price > D("1000000"):
             raise OnChainMarketError(
@@ -110,7 +125,8 @@ def _validate_price(
             )
         return price
 
-    # For everything else, keep only a very high upper bound to catch unit bugs.
+    # Generic fallback: $1T catches raw wei values leaking through
+    # (e.g., returning amount_out without dividing by 10^decimals).
     if price > D("1000000000000"):
         raise OnChainMarketError(
             f"{dex} on {chain} returned {price} for {pair_name} — above generic sanity bounds."
@@ -355,6 +371,14 @@ class OnChainMarket:
                     return self._quote_velodrome(
                         chain, base_addr, quote_addr, dex_type, pair_def.base_asset, pair_def.quote_asset,
                     )
+                elif dex_type == "curve":
+                    return self._quote_curve(
+                        chain, pair_def.base_asset, pair_def.quote_asset,
+                    )
+                elif dex_type == "traderjoe_lb":
+                    return self._quote_traderjoe_lb(
+                        chain, base_addr, quote_addr, pair_def.base_asset, pair_def.quote_asset,
+                    )
                 raise OnChainMarketError(f"Unknown dex_type: {dex_type}")
 
             # Try once, on RPC failure rotate to next endpoint and retry once.
@@ -447,7 +471,12 @@ class OnChainMarket:
                 pool.submit(_fetch_one, dex, pair_def): (dex, pair_def, cache_dex, chain)
                 for dex, pair_def, cache_dex, chain in active_requests
             }
-            # Hard 15s deadline — prevents indefinite scan hangs.
+            # Hard 15s deadline on ALL RPC calls.  Added after production
+            # incidents where web3.py eth_call ignored the HTTP timeout
+            # (8s per request_kwargs) and blocked the entire thread pool
+            # indefinitely.  15s = enough for 2 retries on slow chains
+            # (Alchemy P99 ~2s), short enough to keep scan cadence <30s.
+            # See commit 0d8e09b ("fix: 15s hard deadline with pool.shutdown").
             import concurrent.futures
             done, not_done = concurrent.futures.wait(futures, timeout=15)
             for future in not_done:
@@ -486,7 +515,11 @@ class OnChainMarket:
                         "timeout", "timed out", "429", "rate limit",
                         "connection", "refused", "reset",
                     ))
-                    ttl = 15 * 60 if is_transient else None  # 15 min or default 3h
+                    # Transient errors (timeout, rate limit, connection reset):
+                    # retry after 15 min — the RPC may recover.
+                    # Permanent errors (zero quotes, thin pool, bad ABI):
+                    # skip for 3h (default TTL) — no point retrying quickly.
+                    ttl = 15 * 60 if is_transient else None
                     cache.mark_skip(
                         cache_dex, chain,
                         str(exc),
@@ -508,7 +541,10 @@ class OnChainMarket:
     # Liquidity estimation
     # ------------------------------------------------------------------
 
-    # Sentinel: pool is deep enough that price impact is negligible.
+    # Sentinel value for pools where small and normal quotes return the
+    # same price (zero impact).  $100M is well above the scanner's $1M
+    # filter threshold, so these pools always pass.  We use a sentinel
+    # instead of infinity because Decimal("inf") causes issues downstream.
     _DEEP_POOL_TVL = D("100000000")  # $100M
 
     def _estimate_liquidity_usd(
@@ -523,19 +559,36 @@ class OnChainMarket:
     ) -> Decimal:
         """Estimate pool TVL from price impact between small and normal quotes.
 
-        Math (constant-product approximation):
+        Why this approach instead of reading pool reserves on-chain:
+          - Works uniformly across V3, Algebra, and Solidly AMMs
+          - No need to know pool addresses (quoters handle routing)
+          - Adds only 1 extra RPC call (the small-amount quote)
+          - Gracefully degrades (returns 0 on failure → no filter triggered)
+
+        Math (constant-product AMM approximation):
           impact = |small_price - normal_price| / small_price
           tvl ≈ trade_size_usd / (2 * impact)
 
-        Example: 0.01 WETH → $2344, 1 WETH → $2292 → 2.2% impact
-          tvl ≈ $2292 / (2 * 0.022) ≈ $52K — thin pool.
+        Why this formula works: in a constant-product pool (x * y = k),
+        price impact for a trade of size Δx in a pool of depth L is
+        approximately Δx / L.  Rearranging: L ≈ Δx / impact.  The factor
+        of 2 accounts for both sides of the pool.
+
+        Example: 0.01 WETH → $2344/WETH, 1 WETH → $2292/WETH → 2.2% impact
+          tvl ≈ $2292 / (2 * 0.022) ≈ $52K — thin pool, rejected by scanner.
 
         Returns ``D("0")`` on failure (caller treats as "unknown, don't filter").
+        This is intentional: we'd rather let an unverifiable quote through
+        than block all quotes when the small-amount RPC call fails.
         """
         _ZERO = D("0")
         if normal_price <= _ZERO:
             return _ZERO
         try:
+            # Quote 1% of a token (e.g., 0.01 WETH) as zero-impact reference.
+            # 1% is small enough to have negligible impact in any real pool,
+            # but large enough that the quoter doesn't return 0 due to dust
+            # thresholds or rounding.
             small_price = self._quote_small_amount(
                 chain, base, quote, dex_type, base_symbol, quote_symbol,
             )
@@ -546,6 +599,8 @@ class OnChainMarket:
 
         impact = abs(small_price - normal_price) / small_price
         if impact <= _ZERO:
+            # Zero impact = pool is deep enough that 1 full token doesn't
+            # move the price.  Return sentinel (well above $1M filter).
             return self._DEEP_POOL_TVL
 
         trade_size_usd = normal_price  # 1 unit of base at this price
@@ -1013,3 +1068,76 @@ class OnChainMarket:
 
         fee_bps = D("2") if best_stable else D("20")
         return self._price_from_amount_out(best_out, quote_symbol), fee_bps
+
+    def _quote_curve(
+        self, chain: str, base_symbol: str, quote_symbol: str
+    ) -> tuple[Decimal, Decimal]:
+        """Get price from Curve StableSwap pool via get_dy.
+
+        Returns ``(price, fee_bps)``.  Curve pools charge ~1-4 bps on
+        stablecoin swaps.  get_dy returns the output amount after fees.
+        """
+        pair_key = f"{base_symbol}/{quote_symbol}"
+        reverse_key = f"{quote_symbol}/{base_symbol}"
+        chain_pools = CURVE_POOLS.get(chain, {})
+        pool_addr = chain_pools.get(pair_key) or chain_pools.get(reverse_key)
+        if pool_addr is None:
+            raise OnChainMarketError(
+                f"No Curve pool for {pair_key} on {chain}."
+            )
+
+        indices = CURVE_TOKEN_INDEX.get(pool_addr, {})
+        i = indices.get(base_symbol)
+        j = indices.get(quote_symbol)
+        if i is None or j is None:
+            raise OnChainMarketError(
+                f"Cannot resolve Curve token indices for {pair_key} in pool {pool_addr}."
+            )
+
+        w3 = self._w3[chain]
+        pool = w3.eth.contract(
+            address=Web3.to_checksum_address(pool_addr),
+            abi=CURVE_POOL_ABI,
+        )
+
+        amount_in = self._amount_in_for_symbol(base_symbol)
+        amount_out = pool.functions.get_dy(i, j, amount_in).call()
+        if amount_out == 0:
+            raise OnChainMarketError(f"Curve get_dy returned zero on {chain}.")
+
+        return self._price_from_amount_out(amount_out, quote_symbol), D("4")  # ~4 bps typical
+
+    def _quote_traderjoe_lb(
+        self, chain: str, base: str, quote: str, base_symbol: str, quote_symbol: str
+    ) -> tuple[Decimal, Decimal]:
+        """Get price from TraderJoe V2.1 LBQuoter (Liquidity Book).
+
+        Returns ``(price, fee_bps)``.  Uses findBestPathFromAmountIn which
+        searches across bin steps for the best route.
+        """
+        quoter_addr = TRADERJOE_LB_QUOTER.get(chain)
+        if quoter_addr is None:
+            raise OnChainMarketError(
+                f"No TraderJoe LB quoter for chain '{chain}'."
+            )
+
+        w3 = self._w3[chain]
+        quoter = w3.eth.contract(
+            address=Web3.to_checksum_address(quoter_addr),
+            abi=TRADERJOE_LB_QUOTER_ABI,
+        )
+        amount_in = self._amount_in_for_symbol(base_symbol)
+
+        result = quoter.functions.findBestPathFromAmountIn(
+            [Web3.to_checksum_address(base), Web3.to_checksum_address(quote)],
+            amount_in,
+        ).call()
+
+        # result is a Quote struct; amounts[-1] is the final output amount.
+        amounts = result[4] if len(result) > 4 else []
+        if not amounts or amounts[-1] == 0:
+            raise OnChainMarketError(
+                f"TraderJoe LB returned zero on {chain}."
+            )
+
+        return self._price_from_amount_out(amounts[-1], quote_symbol), D("15")  # ~15 bps typical

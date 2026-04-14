@@ -311,14 +311,21 @@ class ChainExecutor:
         nonce = self.w3.eth.get_transaction_count(self.account.address)
 
         # Dynamic gas estimation with 20% safety buffer.
-        # 1.2x accounts for gas variance between estimation and execution
-        # (other txs in same block can change storage costs).
-        # 500K fallback is empirically safe for flash arb (swaps + repay ≈ 300-400K).
+        # Why 1.2x: gas can vary ±10% between estimate and execution because
+        # other transactions in the same block change storage slot costs
+        # (cold→warm SLOAD, SSTORE refunds).  1.2x covers the worst case
+        # without overpaying.  Too high a buffer wastes gas; too low risks
+        # out-of-gas reverts (lost gas + failed trade).
+        #
+        # 500K fallback: flash arb execution typically uses 300-400K gas
+        # (flash loan callback + 2 swaps + approvals + repay).  500K
+        # provides headroom for complex routing.  On L2s (Arbitrum, Base)
+        # gas is cheap so overshooting doesn't matter much.
         try:
             estimated_gas = call_data.estimate_gas({"from": self.account.address})
             gas_limit = int(estimated_gas * 1.2)
         except Exception:
-            gas_limit = 500_000  # fallback if estimation fails
+            gas_limit = 500_000
 
         # EIP-1559 fee estimation from recent block history.
         max_fee, priority_fee = self._estimate_gas_fees()
@@ -402,8 +409,13 @@ class ChainExecutor:
         exposes to MEV but ensures the trade still lands if relay is down.
         """
         raw_tx = signed_tx.rawTransaction.hex()  # type: ignore[union-attr]
-        # Target next block for maximum inclusion probability.
-        # Older blocks are more likely to miss due to changing prices/conditions.
+        # Target next block (current + 1) for maximum inclusion probability.
+        # Why not current + 2 or later: arb opportunities are time-sensitive —
+        # by block N+2 (~24s later), other bots will have closed the spread.
+        # Flashbots bundles targeting a specific block are automatically dropped
+        # if not included in that block — there is no automatic retry.
+        # This is safe: if our bundle misses, we detect the spread again on
+        # the next scan cycle and submit a fresh bundle.
         target_block = self.w3.eth.block_number + 1
 
         # Flashbots eth_sendBundle JSON-RPC.
@@ -468,9 +480,9 @@ class ChainExecutor:
         tx_hash = Web3.keccak(signed_tx.rawTransaction)  # type: ignore[union-attr]
         return tx_hash
 
-    # Solidly-fork DEX types that use a different swap interface than V3
-    # exactInputSingle. The FlashArbExecutor contract only supports V3 routers.
-    _SOLIDLY_DEX_TYPES = frozenset({"velodrome_v2", "aerodrome"})
+    # DEX types that use a different swap interface than V3 exactInputSingle.
+    # The FlashArbExecutor contract only supports V3 routers.
+    _UNSUPPORTED_EXEC_TYPES = frozenset({"velodrome_v2", "aerodrome", "curve", "traderjoe_lb"})
 
     def _resolve_router(self, dex_name: str) -> str:
         """Map a DEX name from the opportunity to its swap router address."""
@@ -478,10 +490,10 @@ class ChainExecutor:
         # Try to match by dex_type from config.
         for dex in self.config.dexes:
             if dex.name == dex_name and dex.dex_type:
-                if dex.dex_type in self._SOLIDLY_DEX_TYPES:
+                if dex.dex_type in self._UNSUPPORTED_EXEC_TYPES:
                     raise ChainExecutorError(
-                        f"Solidly-fork DEX '{dex_name}' ({dex.dex_type}) cannot be used "
-                        f"for execution — FlashArbExecutor only supports V3 routers."
+                        f"DEX '{dex_name}' ({dex.dex_type}) cannot be used for execution "
+                        f"— FlashArbExecutor only supports V3 routers."
                     )
                 router = chain_routers.get(dex.dex_type)
                 if router:

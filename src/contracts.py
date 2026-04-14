@@ -281,6 +281,97 @@ QUICKSWAP_QUOTER_ABI = [
 ]
 
 # ---------------------------------------------------------------------------
+# Curve StableSwap — exchange_underlying / get_dy for stablecoin pools.
+# Pool addresses are per-pair, not per-chain (each pool is its own contract).
+# ---------------------------------------------------------------------------
+
+# Well-known Curve 3pool / USDT-USDC pools per chain.
+CURVE_POOLS: dict[str, dict[str, str]] = {
+    "ethereum": {
+        "USDT/USDC": "0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7",  # 3pool (DAI/USDC/USDT)
+        "DAI/USDC": "0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7",   # 3pool
+    },
+    "arbitrum": {
+        "USDT/USDC": "0x7f90122BF0700F9E7e1F688fe926940E8839F353",  # 2pool
+    },
+    "base": {
+        "USDT/USDC": "0xf6C5F01C7F3148891ad0e19DF78743D31E390D1f",  # 4pool
+    },
+    "optimism": {
+        "USDT/USDC": "0x1337BedC9D22ecbe766dF105c9623922A27963EC",  # 3pool
+    },
+}
+
+# Token indices within Curve pools.
+# 3pool order: DAI=0, USDC=1, USDT=2
+# 2pool order: USDC=0, USDT=1
+CURVE_TOKEN_INDEX: dict[str, dict[str, int]] = {
+    "0xbEbc44782C7dB0a1A60Cb6fe97d0b483032FF1C7": {"DAI": 0, "USDC": 1, "USDT": 2},
+    "0x7f90122BF0700F9E7e1F688fe926940E8839F353": {"USDC": 0, "USDT": 1},
+    "0xf6C5F01C7F3148891ad0e19DF78743D31E390D1f": {"USDC": 0, "USDT": 1},
+    "0x1337BedC9D22ecbe766dF105c9623922A27963EC": {"DAI": 0, "USDC": 1, "USDT": 2},
+}
+
+# Minimal ABI for Curve StableSwap get_dy (read-only price quote).
+CURVE_POOL_ABI = [
+    {
+        "name": "get_dy",
+        "outputs": [{"type": "uint256", "name": ""}],
+        "inputs": [
+            {"type": "int128", "name": "i"},
+            {"type": "int128", "name": "j"},
+            {"type": "uint256", "name": "dx"},
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    }
+]
+
+# ---------------------------------------------------------------------------
+# TraderJoe V2.1 (Liquidity Book) — Avalanche + Arbitrum.
+# Uses LBRouter's getSwapOut for read-only price quotes.
+# ---------------------------------------------------------------------------
+
+TRADERJOE_LB_ROUTER: dict[str, str] = {
+    "avax": "0xb4315e873dBcf96Ffd0acd8EA43f689D8c20fB30",
+    "arbitrum": "0xb4315e873dBcf96Ffd0acd8EA43f689D8c20fB30",
+}
+
+# LBQuoter (read-only) for TraderJoe V2.1
+TRADERJOE_LB_QUOTER: dict[str, str] = {
+    "avax": "0x64b57F4249aA99a812212cee7DAEFEDC40B203cD",
+    "arbitrum": "0x7f281f22eDB332807A039073a7F34A68e1df6e6A",
+}
+
+# Minimal ABI for LBQuoter findBestPathFromAmountIn (read-only).
+TRADERJOE_LB_QUOTER_ABI = [
+    {
+        "inputs": [
+            {"name": "route", "type": "address[]"},
+            {"name": "amountIn", "type": "uint256"},
+        ],
+        "name": "findBestPathFromAmountIn",
+        "outputs": [
+            {
+                "components": [
+                    {"name": "route", "type": "address[]"},
+                    {"name": "pairs", "type": "address[]"},
+                    {"name": "binSteps", "type": "uint256[]"},
+                    {"name": "versions", "type": "uint256[]"},
+                    {"name": "amounts", "type": "uint256[]"},
+                    {"name": "virtualAmountsWithoutSlippage", "type": "uint256[]"},
+                    {"name": "fees", "type": "uint256[]"},
+                ],
+                "name": "quote",
+                "type": "tuple",
+            }
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    }
+]
+
+# ---------------------------------------------------------------------------
 # Public RPC endpoints (free tier, rate-limited).
 # For production, use Alchemy / Infura / QuickNode with an API key.
 # ---------------------------------------------------------------------------

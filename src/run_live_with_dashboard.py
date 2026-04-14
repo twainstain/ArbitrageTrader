@@ -230,10 +230,17 @@ def main() -> None:
             diagnostics=diagnostics,
         )
         logger.info("[mode] ON-CHAIN — querying DEX contracts via RPC")
+        from api.app import set_diagnostics_ref
+        set_diagnostics_ref(diagnostics)
     else:
         market = LiveMarket(config, pairs=all_pairs)
         logger.info("[mode] LIVE — DeFi Llama aggregated prices")
     scanner = OpportunityScanner(config, pairs=all_pairs)
+
+    # --- Latency tracker ---
+    from observability.latency_tracker import LatencyTracker
+    latency_tracker = LatencyTracker()
+    logger.info("Latency tracking -> logs/latency.jsonl")
 
     logger.info("Starting live scan: %d iterations, %d chains, sleep=%.0fs",
                 args.iterations, len(config.dexes), args.sleep)
@@ -246,6 +253,7 @@ def main() -> None:
 
         logger.info("--- Scan %d/%d ---", i, args.iterations)
         metrics.record_opportunity_detected()  # track scan count
+        latency_tracker.start_scan()
 
         try:
             quotes = market.get_quotes()
@@ -258,16 +266,27 @@ def main() -> None:
                 time.sleep(args.sleep)
             continue
 
+        latency_tracker.mark("rpc_fetch")
+
         # Filter outlier quotes (e.g., Sushi returning $115 when others show $2200).
         from bot import ArbitrageBot
         quotes = ArbitrageBot._filter_outliers(quotes)
 
         # Run scanner — get ALL opportunities, not just the best.
         result = scanner.scan_and_rank(quotes)
+        latency_tracker.mark("scanner")
 
         if not result.opportunities:
             logger.info("No opportunity (evaluated %d candidates, rejected %d)",
                         result.rejected_count, result.rejected_count)
+            latency_tracker.record_pipeline(
+                opp_id="scan", pair="-", chain="-",
+                buy_dex="-", sell_dex="-",
+                spread_pct=0, net_profit=0,
+                status="no_opportunity",
+                pipeline_timings={},
+                scan_marks=latency_tracker.get_scan_marks(),
+            )
             if i < args.iterations:
                 time.sleep(args.sleep)
             continue
@@ -295,6 +314,18 @@ def main() -> None:
             # Use the strategy's evaluate_pair which computes real costs.
             opp = chain_strategy.find_best_opportunity(chain_quotes)
             if opp is None:
+                continue
+
+            # Apply same liquidity filter as the scanner: reject asymmetric
+            # or low-liquidity opportunities (catches thin pool false positives).
+            from decimal import Decimal as _D
+            buy_liq = opp.buy_liquidity_usd
+            sell_liq = opp.sell_liquidity_usd
+            min_liq = min(buy_liq, sell_liq)
+            max_liq = max(buy_liq, sell_liq)
+            if min_liq > _D("0") and min_liq < _D("1000000"):
+                continue
+            if min_liq == _D("0") and max_liq > _D("0"):
                 continue
 
             processed_chains.add(chain_name)
@@ -354,6 +385,20 @@ def main() -> None:
 
         logger.info("Processed %d same-chain + %d cross-chain opportunities",
                      len(processed_chains), 1 if is_cross_chain else 0)
+
+        # Record latency for the best opportunity.
+        latency_tracker.mark("pipeline")
+        scan_marks = latency_tracker.get_scan_marks()
+        latency_tracker.record_pipeline(
+            opp_id="scan",
+            pair=opp.pair, chain=opp.chain or "",
+            buy_dex=opp.buy_dex, sell_dex=opp.sell_dex,
+            spread_pct=float(opp.gross_spread_pct),
+            net_profit=float(opp.net_profit_base),
+            status="cross_chain_rejected" if is_cross_chain else "processed",
+            pipeline_timings={},
+            scan_marks=scan_marks,
+        )
 
         # Smart alerting: Telegram for big wins (>5%), hourly email otherwise.
         alerter.check_opportunity(
