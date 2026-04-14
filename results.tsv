@@ -9,4 +9,6 @@ fd06484	0.66	1.66	695	keep	pre-group quotes by pair in scanner (67% fewer iterat
 117c709	0.55	1.31	696	keep	extend fee tier cache TTL from 60s to 5 minutes (rpc_fetch -57%)
 3fd0275	0.53	1.35	696	keep	fix thread pool sizing for full DEX+pair parallelism
 28aec6b	0.53	1.35	696	keep	skip liquidity estimation for unsupported DEX types
-n/a	0.54	1.34	696	discard	asyncio.run_in_executor (no improvement, adds event loop overhead)
+n/a	0.54	1.34	696	discard	asyncio.run_in_executor on py3.8 (event loop overhead, no async I/O)
+065ef8f	0.52	1.34	696	keep	switch to Python 3.11 (correct version per pyproject.toml)
+n/a	0.62	2.92	696	discard	asyncio.to_thread on py3.11 (still wraps same thread pool)
