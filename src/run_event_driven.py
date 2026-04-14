@@ -146,8 +146,9 @@ class PipelineConsumer:
             latency_ms = time.time() * 1000 - start_ms
             self.metrics.record_latency_ms(latency_ms)
 
-            # Record to latency.jsonl for detailed analysis.
+            # Record to latency.jsonl with per-stage timings.
             if self.latency_tracker:
+                timings = result.timings or {}
                 self.latency_tracker.record_pipeline(
                     opp_id=result.opportunity_id,
                     pair=opp.pair, chain=opp.chain,
@@ -155,7 +156,7 @@ class PipelineConsumer:
                     spread_pct=float(opp.gross_spread_pct),
                     net_profit=float(opp.net_profit_base),
                     status=result.final_status,
-                    pipeline_timings={"total_ms": str(latency_ms)},
+                    pipeline_timings={k: round(v, 2) for k, v in timings.items()},
                 )
 
             logger.info(

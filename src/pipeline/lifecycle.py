@@ -49,6 +49,7 @@ class PipelineResult:
     final_status: str
     reason: str
     net_profit: Decimal = ZERO
+    timings: dict | None = None
 
 
 class CandidatePipeline:
@@ -151,13 +152,13 @@ class CandidatePipeline:
                             float(opportunity.net_profit_base),
                             {k: f"{v:.1f}" for k, v in _timings.items()})
                 return PipelineResult(opp_id, "simulation_approved", verdict.reason,
-                                      opportunity.net_profit_base)
+                                      opportunity.net_profit_base, timings=_timings)
             else:
                 self.repo.update_opportunity_status(opp_id, "rejected")
                 _timings["total_ms"] = (_time.monotonic() - _t0) * 1000
                 logger.info("[pipeline] %s rejected: %s (timings: %s)", opp_id, verdict.reason,
                             {k: f"{v:.1f}" for k, v in _timings.items()})
-                return PipelineResult(opp_id, "rejected", verdict.reason)
+                return PipelineResult(opp_id, "rejected", verdict.reason, timings=_timings)
 
         self.repo.update_opportunity_status(opp_id, "approved")
         logger.info("[pipeline] %s approved", opp_id)
@@ -181,7 +182,9 @@ class CandidatePipeline:
                     f"Buy: {opportunity.buy_dex} → Sell: {opportunity.sell_dex}\n"
                     f"Reason: {sim_reason}",
                     {"pair": opportunity.pair, "reason": sim_reason})
-                return PipelineResult(opp_id, "simulation_failed", sim_reason)
+                _timings["simulate_ms"] = (_time.monotonic() - _t3) * 1000
+                _timings["total_ms"] = (_time.monotonic() - _t0) * 1000
+                return PipelineResult(opp_id, "simulation_failed", sim_reason, timings=_timings)
 
             self.repo.update_opportunity_status(opp_id, "simulated")
             logger.info("[pipeline] %s simulation passed", opp_id)
@@ -213,29 +216,34 @@ class CandidatePipeline:
                     actual_net_profit=actual_profit,
                 )
 
+                _timings["verify_ms"] = (_time.monotonic() - _t4) * 1000
+                _timings["total_ms"] = (_time.monotonic() - _t0) * 1000
+
                 if included and not reverted:
                     self.repo.update_opportunity_status(opp_id, "included")
                     logger.info("[pipeline] %s included: profit=%.6f", opp_id, float(actual_profit))
                     self.dispatcher.trade_executed(
                         pair=opportunity.pair, tx_hash=tx_hash,
                         profit=float(actual_profit))
-                    return PipelineResult(opp_id, "included", "success", actual_profit)
+                    return PipelineResult(opp_id, "included", "success", actual_profit, timings=_timings)
                 elif reverted:
                     self.repo.update_opportunity_status(opp_id, "reverted")
                     logger.info("[pipeline] %s reverted", opp_id)
                     self.dispatcher.trade_reverted(
                         pair=opportunity.pair, tx_hash=tx_hash,
                         reason="tx_reverted")
-                    return PipelineResult(opp_id, "reverted", "tx_reverted")
+                    return PipelineResult(opp_id, "reverted", "tx_reverted", timings=_timings)
                 else:
                     self.repo.update_opportunity_status(opp_id, "not_included")
                     logger.info("[pipeline] %s not included", opp_id)
                     self.dispatcher.alert("trade_not_included",
                         f"Trade not included: {opportunity.pair}\nBundle expired",
                         {"pair": opportunity.pair, "tx_hash": tx_hash})
-                    return PipelineResult(opp_id, "not_included", "bundle_expired")
+                    return PipelineResult(opp_id, "not_included", "bundle_expired", timings=_timings)
 
-            return PipelineResult(opp_id, "submitted", "awaiting_verification")
+            _timings["submit_ms"] = (_time.monotonic() - _t4) * 1000
+            _timings["total_ms"] = (_time.monotonic() - _t0) * 1000
+            return PipelineResult(opp_id, "submitted", "awaiting_verification", timings=_timings)
 
         # No submitter — dry run
         self.repo.update_opportunity_status(opp_id, "dry_run")
@@ -243,7 +251,7 @@ class CandidatePipeline:
         logger.info("[pipeline] %s dry_run (timings: %s)", opp_id,
                     {k: f"{v:.1f}" for k, v in _timings.items()})
         return PipelineResult(opp_id, "dry_run", "approved_not_submitted",
-                              opportunity.net_profit_base)
+                              opportunity.net_profit_base, timings=_timings)
 
 
 def _one_hour_ago() -> str:
