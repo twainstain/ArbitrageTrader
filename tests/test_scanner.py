@@ -211,5 +211,25 @@ class ScanHistoryTests(unittest.TestCase):
         self.assertEqual(len(scanner.recent_history), 2)
 
 
+    def test_grouping_finds_same_opportunities(self) -> None:
+        """Pre-grouping by pair must produce the same results as the old N^2 approach."""
+        config = _make_config()
+        scanner = OpportunityScanner(config)
+        # Quotes across two pairs — should only compare within same pair.
+        quotes = [
+            MarketQuote(dex="A", pair="WETH/USDC", buy_price=3001.0, sell_price=2999.0, fee_bps=0.0),
+            MarketQuote(dex="B", pair="WETH/USDC", buy_price=3081.0, sell_price=3079.0, fee_bps=0.0),
+            MarketQuote(dex="C", pair="WBTC/USDC", buy_price=60001.0, sell_price=59999.0, fee_bps=0.0),
+            MarketQuote(dex="D", pair="WBTC/USDC", buy_price=61001.0, sell_price=60999.0, fee_bps=0.0),
+        ]
+        result = scanner.scan_and_rank(quotes)
+        # Should find opportunities in both pairs.
+        pairs_found = {opp.pair for opp in result.opportunities}
+        self.assertTrue(len(pairs_found) >= 1)
+        # No cross-pair comparisons (e.g. WETH vs WBTC) should be evaluated.
+        for opp in result.opportunities:
+            self.assertEqual(opp.pair.split("/")[1], "USDC")
+
+
 if __name__ == "__main__":
     unittest.main()

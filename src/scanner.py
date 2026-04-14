@@ -115,9 +115,6 @@ class OpportunityScanner:
             return []
 
         # Pre-compute per-chain medians for same-chain price consistency check.
-        # This catches thin pools that return stale prices indistinguishable
-        # from deep pools via price-impact estimation (e.g. Camelot WETH/USDT
-        # on Arbitrum returns $2276 while Uniswap returns $2340).
         _chain_medians = self._compute_chain_medians(quotes)
 
         results: list[Opportunity] = []
@@ -129,73 +126,54 @@ class OpportunityScanner:
         skipped_price_deviation = 0
         evaluated = 0
 
-        for buy_quote in quotes:
-            for sell_quote in quotes:
-                if buy_quote.dex == sell_quote.dex:
-                    skipped_same_dex += 1
-                    continue
-                if buy_quote.pair != sell_quote.pair:
-                    skipped_diff_pair += 1
-                    continue
-                evaluated += 1
-                opp = self.strategy.evaluate_pair(buy_quote, sell_quote)
-                if opp is None:
-                    skipped_unprofitable += 1
-                    continue
-                # Skip cross-chain opportunities — can't atomic execute.
-                if opp.is_cross_chain:
-                    skipped_cross_chain += 1
-                    continue
-                # --- Liquidity filter (3 cases) ---
-                #
-                # Why $1M: a 1 WETH flash loan (~$2300) in a $50K pool has
-                # ~4.6% price impact, which eats the entire spread.  $1M
-                # keeps impact below ~0.1% for our trade sizes.  Derived
-                # from constant-product math: impact ≈ trade_size / TVL.
-                #
-                # Case 1: Both sides report liquidity, but one is thin.
-                #   Example: Uniswap $22M, Camelot $50K → reject.
-                #
-                # Case 2: One side reports liquidity, the other returns 0
-                #   (estimation failed — e.g., Algebra quoter can't handle
-                #   small amounts).  Asymmetric data = unreliable spread.
-                #   This catches the Camelot WETH/USDT false positive where
-                #   Camelot returns $0 liquidity but Uniswap returns $22M.
-                #
-                # Case 3: BOTH sides are 0.  We let these through because
-                #   both quoters failed equally — we can't tell if the pool
-                #   is thin or if the estimation just doesn't work for this
-                #   DEX type.  The outlier filter and strategy warning flags
-                #   provide secondary protection.
-                buy_liq = buy_quote.liquidity_usd
-                sell_liq = sell_quote.liquidity_usd
-                min_liq = min(buy_liq, sell_liq)
-                max_liq = max(buy_liq, sell_liq)
-                if min_liq > ZERO and min_liq < D("1000000"):
-                    skipped_low_liq += 1
-                    continue
-                if min_liq == ZERO and max_liq > ZERO:
-                    skipped_low_liq += 1
-                    continue
-                # Same-chain price consistency: reject if either quote's
-                # price deviates >2% from the chain median for that pair.
-                # This catches thin pools that fool liquidity estimation
-                # (e.g. Camelot returning stale prices with zero impact).
-                if self._price_deviates_from_chain(buy_quote, _chain_medians, D("0.02")):
-                    skipped_price_deviation += 1
-                    logger.info(
-                        "Price deviation: %s on %s deviates from chain median",
-                        buy_quote.pair, buy_quote.dex,
-                    )
-                    continue
-                if self._price_deviates_from_chain(sell_quote, _chain_medians, D("0.02")):
-                    skipped_price_deviation += 1
-                    logger.info(
-                        "Price deviation: %s on %s deviates from chain median",
-                        sell_quote.pair, sell_quote.dex,
-                    )
-                    continue
-                results.append(opp)
+        # Pre-group quotes by pair to eliminate O(n^2) cross-pair comparisons.
+        # With 24 quotes across 3 pairs, this reduces iterations from 576 to
+        # ~3 * 8^2 = 192 (67% fewer).
+        by_pair: dict[str, list[MarketQuote]] = {}
+        for q in quotes:
+            by_pair.setdefault(q.pair, []).append(q)
+
+        for pair_quotes in by_pair.values():
+            if len(pair_quotes) < 2:
+                continue
+            for buy_quote in pair_quotes:
+                for sell_quote in pair_quotes:
+                    if buy_quote.dex == sell_quote.dex:
+                        skipped_same_dex += 1
+                        continue
+                    evaluated += 1
+                    opp = self.strategy.evaluate_pair(buy_quote, sell_quote)
+                    if opp is None:
+                        skipped_unprofitable += 1
+                        continue
+                    if opp.is_cross_chain:
+                        skipped_cross_chain += 1
+                        continue
+                    buy_liq = buy_quote.liquidity_usd
+                    sell_liq = sell_quote.liquidity_usd
+                    min_liq = min(buy_liq, sell_liq)
+                    max_liq = max(buy_liq, sell_liq)
+                    if min_liq > ZERO and min_liq < D("1000000"):
+                        skipped_low_liq += 1
+                        continue
+                    if min_liq == ZERO and max_liq > ZERO:
+                        skipped_low_liq += 1
+                        continue
+                    if self._price_deviates_from_chain(buy_quote, _chain_medians, D("0.02")):
+                        skipped_price_deviation += 1
+                        logger.info(
+                            "Price deviation: %s on %s deviates from chain median",
+                            buy_quote.pair, buy_quote.dex,
+                        )
+                        continue
+                    if self._price_deviates_from_chain(sell_quote, _chain_medians, D("0.02")):
+                        skipped_price_deviation += 1
+                        logger.info(
+                            "Price deviation: %s on %s deviates from chain median",
+                            sell_quote.pair, sell_quote.dex,
+                        )
+                        continue
+                    results.append(opp)
 
         logger.info(
             "[scanner] %d quotes → %d pairs evaluated | "
