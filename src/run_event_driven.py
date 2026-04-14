@@ -387,6 +387,39 @@ def main() -> None:
     alerter = SmartAlerter(repo=repo, telegram=telegram, discord=discord, gmail=gmail, dashboard_url=dashboard_url)
     alerter.start_background_hourly()
 
+    # --- Auto-discover top pairs by volume/liquidity ---
+    from registry.pair_refresher import PairRefresher
+    pair_refresher = PairRefresher(
+        chains=["ethereum", "arbitrum", "base", "polygon", "optimism", "bsc", "avalanche"],
+        min_volume=100_000,
+        min_dex_count=2,
+        max_results=15,
+        interval_seconds=3600,  # refresh every hour
+    )
+    pair_refresher.start()
+
+    discovered = pair_refresher.get_pairs()
+    if discovered:
+        logger.info("Auto-discovered %d pairs — adding to scan list", len(discovered))
+        from config import PairConfig
+        extra = config.extra_pairs or []
+        seen = {config.pair} | {p.pair for p in extra}
+        for dp in discovered:
+            pair_name = f"{dp.base_symbol}/{dp.quote_symbol}"
+            if pair_name not in seen:
+                extra.append(PairConfig(
+                    pair=pair_name,
+                    base_asset=dp.base_symbol,
+                    quote_asset=dp.quote_symbol,
+                    trade_size=config.trade_size,
+                ))
+                seen.add(pair_name)
+                logger.info("  + %s on %s (%d DEXes, $%.0f vol)",
+                           pair_name, dp.chain, dp.dex_count, dp.total_volume_24h)
+        object.__setattr__(config, 'extra_pairs', extra)
+    else:
+        logger.warning("Pair discovery returned 0 pairs — using config pairs only")
+
     # --- Market ---
     rpc = get_rpc_overrides()
     market = OnChainMarket(config, rpc_overrides=rpc or None)
@@ -431,6 +464,7 @@ def main() -> None:
         event_scanner.stop()
         consumer.stop()
         alerter.stop()
+        pair_refresher.stop()
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
