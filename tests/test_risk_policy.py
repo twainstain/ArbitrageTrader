@@ -137,37 +137,43 @@ class MinSpreadTests(unittest.TestCase):
     """Tests for the minimum spread percentage rule."""
 
     def test_spread_below_min_rejected(self) -> None:
-        policy = RiskPolicy(execution_enabled=True, min_spread_pct=D("2.0"))
-        verdict = policy.evaluate(_make_opp(gross_spread_pct=D("1.5")))
+        policy = RiskPolicy(execution_enabled=True, min_spread_pct=D("0.5"))
+        verdict = policy.evaluate(_make_opp(gross_spread_pct=D("0.3")))
         self.assertFalse(verdict.approved)
         self.assertEqual(verdict.reason, "below_min_spread")
 
     def test_spread_above_min_approved(self) -> None:
-        policy = RiskPolicy(execution_enabled=True, min_spread_pct=D("2.0"))
-        verdict = policy.evaluate(_make_opp(gross_spread_pct=D("3.0")))
+        policy = RiskPolicy(execution_enabled=True, min_spread_pct=D("0.5"))
+        verdict = policy.evaluate(_make_opp(gross_spread_pct=D("1.0")))
         self.assertTrue(verdict.approved)
 
     def test_spread_exactly_at_min_approved(self) -> None:
-        policy = RiskPolicy(execution_enabled=True, min_spread_pct=D("2.0"))
-        verdict = policy.evaluate(_make_opp(gross_spread_pct=D("2.0")))
+        policy = RiskPolicy(execution_enabled=True, min_spread_pct=D("0.5"))
+        verdict = policy.evaluate(_make_opp(gross_spread_pct=D("0.5")))
         self.assertTrue(verdict.approved)
 
-    def test_default_min_spread_is_2_percent(self) -> None:
+    def test_default_min_spread_is_half_percent(self) -> None:
         policy = RiskPolicy()
-        self.assertEqual(policy.min_spread_pct, D("2.0"))
+        self.assertEqual(policy.min_spread_pct, D("0.5"))
 
     def test_custom_min_spread(self) -> None:
         policy = RiskPolicy(min_spread_pct=D("5.0"))
         self.assertEqual(policy.min_spread_pct, D("5.0"))
 
-    def test_thin_spread_rejected_even_if_profitable(self) -> None:
-        """A spread of 0.5% should be rejected even with good profit."""
-        policy = RiskPolicy(execution_enabled=True, min_spread_pct=D("2.0"))
+    def test_tiny_spread_rejected(self) -> None:
+        """A spread of 0.1% should be rejected — too thin for real execution."""
+        policy = RiskPolicy(execution_enabled=True)
         verdict = policy.evaluate(_make_opp(
-            gross_spread_pct=D("0.5"), net_profit_base=D("0.01"),
+            gross_spread_pct=D("0.1"), net_profit_base=D("0.01"),
         ))
         self.assertFalse(verdict.approved)
         self.assertEqual(verdict.reason, "below_min_spread")
+
+    def test_half_percent_spread_with_flash_loan_approved(self) -> None:
+        """0.5% spread is viable with flash loans (no capital at risk)."""
+        policy = RiskPolicy(execution_enabled=True)
+        verdict = policy.evaluate(_make_opp(gross_spread_pct=D("0.5")))
+        self.assertTrue(verdict.approved)
 
 
 class ToDictTests(unittest.TestCase):

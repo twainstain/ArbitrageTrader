@@ -41,9 +41,9 @@ class RiskPolicy:
     min_net_profit: Decimal = D("0.005")
 
     # Minimum spread percentage to consider an opportunity.
-    # Rejects thin spreads that look profitable in theory but can't survive
-    # real execution (slippage, gas, MEV). Default 2%.
-    min_spread_pct: Decimal = D("2.0")
+    # With flash loans, even small spreads can be profitable since there's
+    # no capital at risk. 0.5% covers fees + gas on most L2 chains.
+    min_spread_pct: Decimal = D("0.5")
 
     # Maximum allowed slippage in bps
     max_slippage_bps: Decimal = D("50")
