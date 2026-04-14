@@ -265,12 +265,42 @@ def main() -> None:
             )
             pipeline.process(opp)
 
-        # Check the overall best — only process if same-chain (executable).
+        # Process the overall best through the pipeline.
+        # Cross-chain opportunities get recorded but rejected so they show
+        # on the dashboard with a clear reason.
         opp = result.best
         buy_chain = opp.buy_dex.rsplit("-", 1)[-1].lower() if "-" in opp.buy_dex else opp.buy_dex.lower()
         sell_chain = opp.sell_dex.rsplit("-", 1)[-1].lower() if "-" in opp.sell_dex else opp.sell_dex.lower()
+        is_cross_chain = buy_chain != sell_chain
 
-        if buy_chain == sell_chain:
+        if is_cross_chain:
+            logger.info(
+                "Best overall is CROSS-CHAIN: %s buy=%s sell=%s spread=%.4f%%",
+                opp.pair, opp.buy_dex, opp.sell_dex,
+                float(opp.gross_spread_pct),
+            )
+            # Record in DB as rejected so it shows on dashboard
+            opp_id = repo.create_opportunity(
+                pair=opp.pair, chain=opp.chain,
+                buy_dex=opp.buy_dex, sell_dex=opp.sell_dex,
+                spread_bps=opp.gross_spread_pct,
+            )
+            repo.save_pricing(
+                opp_id=opp_id,
+                input_amount=opp.cost_to_buy_quote,
+                estimated_output=opp.proceeds_from_sell_quote,
+                fee_cost=opp.dex_fee_cost_quote,
+                slippage_cost=opp.slippage_cost_quote,
+                gas_estimate=opp.gas_cost_base,
+                expected_net_profit=opp.net_profit_base,
+            )
+            repo.save_risk_decision(
+                opp_id=opp_id, approved=False,
+                reason_code="cross_chain",
+                threshold_snapshot=f"buy_chain={buy_chain}, sell_chain={sell_chain}",
+            )
+            repo.update_opportunity_status(opp_id, "rejected")
+        else:
             logger.info(
                 "Best overall (same-chain): %s buy=%s sell=%s spread=%.4f%% net=%.6f",
                 opp.pair, opp.buy_dex, opp.sell_dex,
@@ -279,14 +309,9 @@ def main() -> None:
             pipeline_result = pipeline.process(opp)
             logger.info("Pipeline result: %s — %s", pipeline_result.final_status, pipeline_result.reason)
             metrics.record_expected_profit(float(opp.net_profit_base))
-        else:
-            logger.info(
-                "Best overall is CROSS-CHAIN (skipped): %s buy=%s sell=%s spread=%.4f%%",
-                opp.pair, opp.buy_dex, opp.sell_dex,
-                float(opp.gross_spread_pct),
-            )
 
-        logger.info("Processed %d same-chain opportunities", len(processed_chains))
+        logger.info("Processed %d same-chain + %d cross-chain opportunities",
+                     len(processed_chains), 1 if is_cross_chain else 0)
 
         # Smart alerting: Telegram for big wins (>5%), hourly email otherwise.
         alerter.check_opportunity(
