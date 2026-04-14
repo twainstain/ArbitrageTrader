@@ -889,5 +889,98 @@ class OnChainMarketTraderJoeTests(unittest.TestCase):
             market._quote_traderjoe_lb("polygon", "0xa", "0xb", "WETH", "USDC")
 
 
+class QuoteSmallAmountFeeCacheTests(unittest.TestCase):
+    """Tests for _quote_small_amount reusing the _best_fee cache."""
+
+    @patch("onchain_market.Web3")
+    def test_uses_cached_fee_tier(self, mock_web3_cls: MagicMock) -> None:
+        """When _best_fee has a cached tier, _quote_small_amount uses it
+        instead of sweeping all 4 tiers (saves 3 RPC calls)."""
+        config = _make_onchain_config()
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        market = OnChainMarket(config)
+
+        import time
+        # Pre-populate the fee cache with tier 500 for uniswap_v3.
+        market._best_fee["uniswap_v3:ethereum:WETH/USDC"] = (500, time.monotonic())
+
+        mock_quoter = MagicMock()
+        mock_quoter.functions.quoteExactInputSingle.return_value.call.return_value = [
+            22_000_000, 0, 0, 150_000  # 22 USDC for 0.01 WETH
+        ]
+        mock_w3 = MagicMock()
+        mock_w3.eth.contract.return_value = mock_quoter
+        market._w3 = {"ethereum": mock_w3}
+
+        result = market._quote_small_amount(
+            "ethereum", "0xweth", "0xusdc", "uniswap_v3", "WETH", "USDC",
+        )
+
+        # Should have called quoteExactInputSingle exactly once (cached tier).
+        self.assertEqual(mock_quoter.functions.quoteExactInputSingle.call_count, 1)
+        # Verify the fee tier passed was 500 (the cached one).
+        call_args = mock_quoter.functions.quoteExactInputSingle.call_args[0][0]
+        self.assertEqual(call_args[3], 500)  # fee tier position in tuple
+        self.assertGreater(result, 0)
+
+    @patch("onchain_market.Web3")
+    def test_falls_back_to_sweep_without_cache(self, mock_web3_cls: MagicMock) -> None:
+        """Without a cached fee tier, _quote_small_amount sweeps all tiers."""
+        config = _make_onchain_config()
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        market = OnChainMarket(config)
+        # No cached fee tier — _best_fee is empty.
+
+        mock_quoter = MagicMock()
+        # Only tier 3000 succeeds, others raise.
+        def side_effect(params):
+            fee = params[3]
+            result = MagicMock()
+            if fee == 3000:
+                result.call.return_value = [22_000_000, 0, 0, 150_000]
+            else:
+                result.call.side_effect = Exception("no pool")
+            return result
+        mock_quoter.functions.quoteExactInputSingle.side_effect = side_effect
+        mock_w3 = MagicMock()
+        mock_w3.eth.contract.return_value = mock_quoter
+        market._w3 = {"ethereum": mock_w3}
+
+        result = market._quote_small_amount(
+            "ethereum", "0xweth", "0xusdc", "uniswap_v3", "WETH", "USDC",
+        )
+
+        # Should have tried all 4 fee tiers.
+        self.assertEqual(mock_quoter.functions.quoteExactInputSingle.call_count, 4)
+        self.assertGreater(result, 0)
+
+    @patch("onchain_market.Web3")
+    def test_cached_tier_failure_returns_zero(self, mock_web3_cls: MagicMock) -> None:
+        """If the cached tier fails, _quote_small_amount returns 0 (graceful)."""
+        config = _make_onchain_config()
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        market = OnChainMarket(config)
+
+        import time
+        market._best_fee["sushi_v3:ethereum:WETH/USDC"] = (500, time.monotonic())
+
+        mock_quoter = MagicMock()
+        mock_quoter.functions.quoteExactInputSingle.return_value.call.side_effect = Exception("rpc error")
+        mock_w3 = MagicMock()
+        mock_w3.eth.contract.return_value = mock_quoter
+        market._w3 = {"ethereum": mock_w3}
+
+        result = market._quote_small_amount(
+            "ethereum", "0xweth", "0xusdc", "sushi_v3", "WETH", "USDC",
+        )
+
+        # Should return 0 (graceful degradation, not exception).
+        from decimal import Decimal
+        self.assertEqual(result, Decimal("0"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -659,19 +659,37 @@ class OnChainMarket:
                 address=Web3.to_checksum_address(qaddr),
                 abi=UNISWAP_V3_QUOTER_ABI,
             )
-            best_out = 0
-            for fee in (100, 500, 3000, 10000):
+            # Reuse the cached best fee tier from the main quote (set by
+            # _try_fee_tiers).  This avoids sweeping all 4 tiers again,
+            # saving 3 RPC calls per DEX per liquidity estimation.
+            fee_cache_key = f"{dex_type}:{chain}:{base_symbol}/{quote_symbol}"
+            cached_fee = self._best_fee.get(fee_cache_key)
+            if cached_fee is not None:
+                fee_tier = cached_fee[0]
                 try:
                     result = quoter.functions.quoteExactInputSingle((
                         Web3.to_checksum_address(base),
                         Web3.to_checksum_address(quote),
-                        SMALL_AMOUNT, fee, 0,
+                        SMALL_AMOUNT, fee_tier, 0,
                     )).call()
-                    if result[0] > best_out:
-                        best_out = result[0]
+                    amount_out = result[0]
                 except Exception:
-                    continue
-            amount_out = best_out
+                    amount_out = 0
+            else:
+                # No cached tier yet — fall back to full sweep.
+                best_out = 0
+                for fee in (100, 500, 3000, 10000):
+                    try:
+                        result = quoter.functions.quoteExactInputSingle((
+                            Web3.to_checksum_address(base),
+                            Web3.to_checksum_address(quote),
+                            SMALL_AMOUNT, fee, 0,
+                        )).call()
+                        if result[0] > best_out:
+                            best_out = result[0]
+                    except Exception:
+                        continue
+                amount_out = best_out
         else:
             return D("0")
 
