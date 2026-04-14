@@ -234,6 +234,7 @@ class EventDrivenScanner:
         metrics: MetricsCollector,
         circuit_breaker: CircuitBreaker,
         poll_interval: float = 2.0,
+        latency_tracker: "LatencyTracker | None" = None,
     ) -> None:
         self.config = config
         self.queue = queue
@@ -242,6 +243,7 @@ class EventDrivenScanner:
         self.metrics = metrics
         self.breaker = circuit_breaker
         self.poll_interval = poll_interval
+        self.latency_tracker = latency_tracker
         self._running = False
 
     def run(self) -> None:
@@ -261,6 +263,9 @@ class EventDrivenScanner:
             scan_count += 1
             self.metrics.record_opportunity_detected()
 
+            if self.latency_tracker:
+                self.latency_tracker.start_scan()
+
             try:
                 quotes = self.market.get_quotes()
                 # Filter outliers (Sushi returning $115 when others show $2200).
@@ -273,12 +278,18 @@ class EventDrivenScanner:
                 time.sleep(self.poll_interval)
                 continue
 
+            if self.latency_tracker:
+                self.latency_tracker.mark("rpc_fetch")
+
             if len(quotes) < 2:
                 time.sleep(self.poll_interval)
                 continue
 
             # Run scanner — get all ranked opportunities.
             result = self.scanner.scan_and_rank(quotes)
+
+            if self.latency_tracker:
+                self.latency_tracker.mark("scanner")
 
             # Push all actionable opportunities to the queue.
             pushed = 0
@@ -406,6 +417,7 @@ def main() -> None:
         config=config, queue=queue, scanner=scanner,
         market=market, metrics=metrics, circuit_breaker=breaker,
         poll_interval=args.poll_interval,
+        latency_tracker=latency_tracker,
     )
 
     # Register scanner with API so it can be controlled via /scanner/start|stop.
