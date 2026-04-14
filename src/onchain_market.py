@@ -146,7 +146,9 @@ class OnChainMarket:
                     urls.append(PUBLIC_RPC_URLS[chain])
                 self._rpc_urls[chain] = urls
                 self._rpc_index[chain] = 0
-                self._w3[chain] = Web3(Web3.HTTPProvider(urls[0]))
+                self._w3[chain] = Web3(Web3.HTTPProvider(
+                    urls[0], request_kwargs={"timeout": 3},
+                ))
 
     def _rotate_rpc(self, chain: str) -> None:
         """Rotate to the next RPC endpoint for a chain after a failure.
@@ -160,7 +162,9 @@ class OnChainMarket:
         idx = (self._rpc_index.get(chain, 0) + 1) % len(urls)
         self._rpc_index[chain] = idx
         new_url = urls[idx]
-        self._w3[chain] = Web3(Web3.HTTPProvider(new_url))
+        self._w3[chain] = Web3(Web3.HTTPProvider(
+            new_url, request_kwargs={"timeout": 3},
+        ))
         _logger.info("RPC failover for %s → %s", chain, new_url[:50])
 
     def _try_fee_tiers(
