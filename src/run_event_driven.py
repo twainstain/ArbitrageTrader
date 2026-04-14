@@ -261,7 +261,6 @@ class EventDrivenScanner:
         scan_count = 0
         while self._running:
             scan_count += 1
-            self.metrics.record_opportunity_detected()
 
             if self.latency_tracker:
                 self.latency_tracker.start_scan()
@@ -298,6 +297,7 @@ class EventDrivenScanner:
                 score = float(opp.net_profit_base) * (1 + opp.liquidity_score)
                 if self.queue.push(opp, priority=score):
                     pushed += 1
+                    self.metrics.record_opportunity_detected()
 
             # Also find same-chain opportunities (like run_live_with_dashboard does).
             chain_map: dict[str, list] = {}
@@ -318,8 +318,9 @@ class EventDrivenScanner:
                 chain_opp = chain_strategy.find_best_opportunity(chain_quotes)
                 if chain_opp is not None:
                     score = float(chain_opp.net_profit_base) * 0.5
-                    self.queue.push(chain_opp, priority=score)
-                    pushed += 1
+                    if self.queue.push(chain_opp, priority=score):
+                        pushed += 1
+                        self.metrics.record_opportunity_detected()
 
             if pushed > 0:
                 logger.info(
