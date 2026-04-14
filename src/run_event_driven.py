@@ -383,7 +383,7 @@ def main() -> None:
         logger.warning("Alerting: no backends configured")
 
     dashboard_url = f"http://localhost:{args.port}/dashboard"
-    alerter = SmartAlerter(repo=repo, telegram=telegram, gmail=gmail, dashboard_url=dashboard_url)
+    alerter = SmartAlerter(repo=repo, telegram=telegram, discord=discord, gmail=gmail, dashboard_url=dashboard_url)
     alerter.start_background_hourly()
 
     # --- Market ---
