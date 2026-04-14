@@ -261,7 +261,20 @@ class OnChainMarket:
 
         with ThreadPoolExecutor(max_workers=len(active_dexes)) as pool:
             futures = {pool.submit(_fetch_one, dex): dex for dex in active_dexes}
-            for future in as_completed(futures):
+            # Hard 15s deadline for ALL quotes — prevents indefinite hangs.
+            done, not_done = as_completed(futures), set()
+            import concurrent.futures
+            done, not_done = concurrent.futures.wait(futures, timeout=15)
+            for future in not_done:
+                dex = futures[future]
+                _logger.warning("RPC timeout (15s): %s on %s", dex.name, dex.chain)
+                future.cancel()
+                cache.mark_skip(
+                    dex.name, dex.chain or "",
+                    "RPC call exceeded 15s deadline",
+                    ttl_override=15 * 60,
+                )
+            for future in done:
                 dex = futures[future]
                 try:
                     quotes.append(future.result())
