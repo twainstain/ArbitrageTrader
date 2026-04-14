@@ -582,10 +582,15 @@ class OnChainMarket:
             return _ZERO
 
         # Check TVL cache — avoids extra RPC calls for liquidity estimation.
+        # Deep pools (>$1M) use a longer TTL (30 min) since they don't dry up
+        # suddenly. Thin pools use the default 5 min so we re-check sooner.
         tvl_key = f"{dex_type}:{chain}:{base}:{quote}".lower()
         cached = self._tvl_cache.get(tvl_key)
-        if cached is not None and (_time.monotonic() - cached[1]) < self._TVL_CACHE_TTL:
-            return cached[0]
+        if cached is not None:
+            cached_tvl, cached_ts = cached
+            ttl = 1800.0 if cached_tvl >= D("1000000") else self._TVL_CACHE_TTL
+            if (_time.monotonic() - cached_ts) < ttl:
+                return cached_tvl
 
         try:
             small_price = self._quote_small_amount(

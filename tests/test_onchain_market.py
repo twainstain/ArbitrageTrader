@@ -650,8 +650,9 @@ class TvlCacheTests(unittest.TestCase):
         import time
 
         # Pre-populate cache with expired entry.
+        # Deep pools ($5M) have 30-min TTL, so use 1801s to ensure expiry.
         tvl_key = "uniswap_v3:ethereum:0xweth:0xusdc"
-        self.market._tvl_cache[tvl_key] = (D("5000000"), time.monotonic() - 301)
+        self.market._tvl_cache[tvl_key] = (D("5000000"), time.monotonic() - 1801)
 
         call_count = 0
 
@@ -1013,6 +1014,63 @@ class PersistentThreadPoolTests(unittest.TestCase):
         market.get_quotes()  # All cached, no futures submitted
 
         self.assertEqual(id(market._pool), pool_id)
+
+
+class TieredTVLCacheTTLTests(unittest.TestCase):
+    """Tests for tiered TVL cache TTL (deep pools get longer TTL)."""
+
+    @patch("onchain_market.Web3")
+    def test_deep_pool_uses_long_ttl(self, mock_web3_cls: MagicMock) -> None:
+        """Pools with >$1M TVL should stay cached for 30 minutes."""
+        config = _make_onchain_config()
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        market = OnChainMarket(config)
+
+        from decimal import Decimal
+        import time
+
+        # Seed the TVL cache with a deep pool ($50M).
+        key = "uniswap_v3:ethereum:0xweth:0xusdc"
+        market._tvl_cache[key] = (Decimal("50000000"), time.monotonic() - 600)
+        # 600s ago = 10 min. Default TTL is 5 min, but deep pool TTL is 30 min.
+
+        result = market._estimate_liquidity_usd(
+            "ethereum", "0xweth", "0xusdc", "uniswap_v3", "WETH", "USDC", Decimal("2300"),
+        )
+        # Should return cached value (not re-query).
+        self.assertEqual(result, Decimal("50000000"))
+
+    @patch("onchain_market.Web3")
+    def test_thin_pool_uses_short_ttl(self, mock_web3_cls: MagicMock) -> None:
+        """Pools with <$1M TVL should expire at the default 5-minute TTL."""
+        config = _make_onchain_config()
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        market = OnChainMarket(config)
+
+        from decimal import Decimal
+        import time
+
+        # Seed the TVL cache with a thin pool ($50K), expired past 5 min.
+        key = "uniswap_v3:ethereum:0xweth:0xusdc"
+        market._tvl_cache[key] = (Decimal("50000"), time.monotonic() - 400)
+        # 400s > 300s default TTL, so thin pool cache should be expired.
+
+        mock_w3 = MagicMock()
+        mock_quoter = MagicMock()
+        # Return a small-amount price slightly different from normal → some impact.
+        mock_quoter.functions.quoteExactInputSingle.return_value.call.return_value = [
+            23_500_000, 0, 0, 150_000  # ~$23.50 for 0.01 WETH
+        ]
+        mock_w3.eth.contract.return_value = mock_quoter
+        market._w3 = {"ethereum": mock_w3}
+
+        result = market._estimate_liquidity_usd(
+            "ethereum", "0xweth", "0xusdc", "uniswap_v3", "WETH", "USDC", Decimal("2300"),
+        )
+        # Should NOT return the cached $50K — should re-estimate.
+        self.assertNotEqual(result, Decimal("50000"))
 
 
 if __name__ == "__main__":
