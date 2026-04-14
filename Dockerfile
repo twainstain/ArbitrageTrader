@@ -32,7 +32,7 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
+    CMD python -c "import urllib.request,base64,os; u=os.environ.get('DASHBOARD_USER','admin'); p=os.environ.get('DASHBOARD_PASS','admin'); r=urllib.request.Request('http://localhost:8000/health'); r.add_header('Authorization','Basic '+base64.b64encode(f'{u}:{p}'.encode()).decode()); urllib.request.urlopen(r)"
 
 # Default: on-chain event-driven scanner with dashboard.
 # Uses per-DEX RPC quotes for same-chain arbitrage detection.

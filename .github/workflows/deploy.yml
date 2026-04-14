@@ -88,14 +88,16 @@ jobs:
             # Pull latest image
             aws ecr get-login-password --region us-east-1 \
               | docker login --username AWS --password-stdin ${{ secrets.ECR_REGISTRY }}
+            export ECR_REGISTRY=${{ secrets.ECR_REGISTRY }}
             docker compose pull bot
 
             # Rolling restart — stop bot, start with new image
             docker compose up -d bot
 
-            # Health check — wait up to 30s
+            # Health check — wait up to 30s (auth required)
+            CREDS=$(grep DASHBOARD_USER .env | cut -d= -f2):$(grep DASHBOARD_PASS .env | cut -d= -f2)
             for i in $(seq 1 6); do
-              if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              if curl -sf -u "$CREDS" http://localhost:8000/health > /dev/null 2>&1; then
                 echo "Health check passed"
                 exit 0
               fi
