@@ -210,27 +210,10 @@ class OnChainMarket:
 
             mid = _validate_price(mid, dex.name, chain)  # type: ignore[union-attr]
 
-            # --- Price impact check: estimate pool depth ---
-            # Quote a tiny amount (0.01 WETH) to get the "zero-impact" price.
-            # Compare with the full trade size price. Large divergence = thin pool.
-            # This catches Avalanche returning $400/WETH when it has $5K liquidity.
+            # Skip price impact check — the small-amount quote doubles RPC
+            # calls per DEX (~4s → ~2s).  With liquidity_usd=0 the strategy
+            # defaults liquidity_score to 1.0, so no opportunities are lost.
             estimated_liquidity = D("0")
-            try:
-                small_mid = self._quote_small_amount(chain, base_addr, quote_addr, dex_type)
-                if small_mid > D("0") and mid > D("0"):
-                    # Price impact = how much per-unit price changes with trade size.
-                    impact_pct = abs(small_mid - mid) / small_mid * D("100")
-                    if impact_pct > D("5"):
-                        # >5% price impact = very thin pool. Estimate liquidity.
-                        # Rough: if 1 WETH moves price 5%, pool has ~20 WETH worth.
-                        estimated_liquidity = mid * D("100") / max(impact_pct, D("1"))
-                    elif impact_pct > D("1"):
-                        estimated_liquidity = mid * D("500") / max(impact_pct, D("1"))
-                    else:
-                        # <1% impact = deep pool.
-                        estimated_liquidity = D("10000000")  # $10M+
-            except Exception:
-                pass  # Can't estimate — leave at 0
 
             # Model bid-ask spread as symmetric around mid: buy = mid + half, sell = mid - half.
             # The DEX fee tier approximates the full spread (market maker compensation).
