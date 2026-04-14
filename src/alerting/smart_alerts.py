@@ -45,7 +45,9 @@ class SmartAlerter:
         self.gmail = gmail or GmailAlert()
         self.dashboard_url = dashboard_url
         self.email_interval = email_interval_seconds
-        self._last_email_at: float = time.time()
+        # Send first report 5 minutes after startup (not a full hour).
+        # Prevents restarts from indefinitely delaying the first email.
+        self._last_email_at: float = time.time() - email_interval_seconds + 300
         self._hourly_thread: Thread | None = None
         self._running = False
 
