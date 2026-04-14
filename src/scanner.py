@@ -114,12 +114,19 @@ class OpportunityScanner:
         if len(quotes) < 2:
             return []
 
+        # Pre-compute per-chain medians for same-chain price consistency check.
+        # This catches thin pools that return stale prices indistinguishable
+        # from deep pools via price-impact estimation (e.g. Camelot WETH/USDT
+        # on Arbitrum returns $2276 while Uniswap returns $2340).
+        _chain_medians = self._compute_chain_medians(quotes)
+
         results: list[Opportunity] = []
         skipped_same_dex = 0
         skipped_diff_pair = 0
         skipped_unprofitable = 0
         skipped_cross_chain = 0
         skipped_low_liq = 0
+        skipped_price_deviation = 0
         evaluated = 0
 
         for buy_quote in quotes:
@@ -170,16 +177,83 @@ class OpportunityScanner:
                 if min_liq == ZERO and max_liq > ZERO:
                     skipped_low_liq += 1
                     continue
+                # Same-chain price consistency: reject if either quote's
+                # price deviates >2% from the chain median for that pair.
+                # This catches thin pools that fool liquidity estimation
+                # (e.g. Camelot returning stale prices with zero impact).
+                if self._price_deviates_from_chain(buy_quote, _chain_medians, D("0.02")):
+                    skipped_price_deviation += 1
+                    logger.info(
+                        "Price deviation: %s on %s deviates from chain median",
+                        buy_quote.pair, buy_quote.dex,
+                    )
+                    continue
+                if self._price_deviates_from_chain(sell_quote, _chain_medians, D("0.02")):
+                    skipped_price_deviation += 1
+                    logger.info(
+                        "Price deviation: %s on %s deviates from chain median",
+                        sell_quote.pair, sell_quote.dex,
+                    )
+                    continue
                 results.append(opp)
 
         logger.info(
             "[scanner] %d quotes → %d pairs evaluated | "
-            "unprofitable=%d cross_chain=%d low_liq=%d | %d passed",
+            "unprofitable=%d cross_chain=%d low_liq=%d price_dev=%d | %d passed",
             len(quotes), evaluated,
             skipped_unprofitable, skipped_cross_chain, skipped_low_liq,
-            len(results),
+            skipped_price_deviation, len(results),
         )
         return results
+
+    @staticmethod
+    def _compute_chain_medians(quotes: list[MarketQuote]) -> dict[str, Decimal]:
+        """Compute median mid-price per (pair, chain) for consistency checks.
+
+        Returns a dict keyed by "pair:chain" → median mid-price.
+        Chain is extracted from the DEX name suffix (e.g. "Uniswap-Arbitrum" → "arbitrum").
+        """
+        import statistics
+        TWO = D("2")
+        by_pair_chain: dict[str, list[Decimal]] = {}
+        for q in quotes:
+            parts = q.dex.rsplit("-", 1)
+            chain = parts[1].lower() if len(parts) == 2 else ""
+            if not chain:
+                continue
+            key = f"{q.pair}:{chain}"
+            mid = (q.buy_price + q.sell_price) / TWO
+            by_pair_chain.setdefault(key, []).append(mid)
+
+        medians: dict[str, Decimal] = {}
+        for key, mids in by_pair_chain.items():
+            if len(mids) >= 2:
+                medians[key] = statistics.median(mids)
+        return medians
+
+    @staticmethod
+    def _price_deviates_from_chain(
+        quote: MarketQuote,
+        chain_medians: dict[str, Decimal],
+        max_deviation: Decimal,
+    ) -> bool:
+        """Return True if a quote's price deviates from its chain median.
+
+        Only triggers when there are 2+ quotes for the same pair on the
+        same chain — ensures we have a reliable baseline to compare against.
+        """
+        TWO = D("2")
+        parts = quote.dex.rsplit("-", 1)
+        chain = parts[1].lower() if len(parts) == 2 else ""
+        if not chain:
+            return False
+        key = f"{quote.pair}:{chain}"
+        median = chain_medians.get(key)
+        if median is None or median == ZERO:
+            return False
+        mid = (quote.buy_price + quote.sell_price) / TWO
+        deviation = abs(mid - median) / median
+        return deviation > max_deviation
 
     def _composite_score(self, opp: Opportunity) -> float:
         """Compute a multi-factor ranking score for opportunity prioritization.
