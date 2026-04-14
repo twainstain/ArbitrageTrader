@@ -1,43 +1,49 @@
 # Current State
 
-## Session: 2026-04-13
+## Session: 2026-04-14
 
-### What Was Done
+### Summary
 
-Completed Phase 4 production hardening + dashboard + deployment infrastructure. 436 tests pass.
+Production bot deployed on AWS EC2 with 22 DEX quoters implemented, dynamic pair discovery, thin pool detection. 571 tests. Currently debugging RPC call hangs.
 
-**New this round:**
+### Deployed
 
-| Module | What | Tests |
-|--------|------|-------|
-| src/bot.py | AlertDispatcher wired: opportunity_found, trade_executed, system_error, daily_summary | 7 |
-| src/pipeline/lifecycle.py | Dispatcher wired: simulation_failed, trade_reverted, trade_not_included | 7 |
-| src/run_live_with_dashboard.py | Full backend init (Telegram+Discord+Gmail), graceful shutdown | -- |
-| src/main.py | SIGTERM/SIGINT signal handlers | -- |
-| src/api/dashboard.py | API_BASE auto-detection for CloudFront path routing | -- |
-| pyproject.toml | All dependencies declared (web3, requests, fastapi, uvicorn, psycopg2, dotenv) | -- |
-| Dockerfile | Multi-stage Python 3.11-slim, health check | -- |
-| docker-compose.yml | 6 services: bot, prometheus, grafana, loki, promtail, nginx | -- |
-| monitoring/ | 7 config files: prometheus, loki, promtail, nginx, grafana provisioning | -- |
-| docs/deployment.md | Full 1046-line deployment guide | -- |
+- **EC2**: 18.215.6.141 (spot t3.small)
+- **Dashboard**: https://arb-trader.yeda-ai.com/dashboard
+- **DB**: Neon Postgres
+- **Alerting**: Discord + Gmail
 
-### Architecture — Fully Implemented
+### What Works
 
-All Phase 1-4 items complete. Phase 5 (triangular arb, mempool, backrun) intentionally deferred.
+| Feature | Status |
+|---------|--------|
+| Pipeline (detect → price → risk) | Working, ~30ms |
+| Thin pool filter (5% global median) | Working |
+| Liquidity cache (3h/15min TTL) | Working |
+| Auto pair discovery (DexScreener hourly) | Working, finds 7+ pairs |
+| Dynamic token registry | Working, auto-registers from DexScreener |
+| Dashboard profit reports (per time window) | Working |
+| Cross-chain filter | Working |
 
-### Deployment Status
+### What Needs Fixing
 
-| Item | Status |
-|------|--------|
-| Dependencies (pyproject.toml) | DONE |
-| Graceful shutdown (SIGTERM) | DONE |
-| Dockerfile | DONE |
-| docker-compose.yml (6 services) | DONE |
-| Monitoring configs (7 files) | DONE |
-| Alert wiring (bot + pipeline + live runner) | DONE |
-| Dashboard path routing (CloudFront) | DONE |
-| GitHub Actions CI/CD | TODO |
-| CloudFormation template | TODO |
-| spot-monitor.sh | TODO |
+| Issue | Root Cause | Fix |
+|-------|-----------|-----|
+| **Scans hang on first cycle** | SushiSwap/PancakeSwap quoters hang on eth_call despite 8s HTTP timeout | Need `eth_call` level timeout or move to WebSocket RPCs |
+| Niche DEXes (Velodrome, Camelot, Aerodrome) | Contract calls hang | Debug ABI/contract interaction separately |
+| BSC WETH decimal mismatch | Returns $2.3 quadrillion | Need WBNB/USDT pair instead |
+| CI/CD test failure | Unknown — tests pass locally | Check GitHub Actions logs |
 
-### Test Count: 436
+### DEX Coverage (implemented in code)
+
+| DEX | Type | Chains | Status |
+|-----|------|--------|--------|
+| Uniswap V3 | V3 Quoter | ETH, ARB, BASE, OPT | Working |
+| SushiSwap V3 | V3 Quoter | ETH, ARB, BASE, OPT | Hanging on some chains |
+| PancakeSwap V3 | V3 Quoter | ETH, ARB, BASE | Hanging |
+| QuickSwap | Algebra | Polygon | Zero quotes |
+| Camelot V3 | Algebra | Arbitrum | Implemented, disabled (hangs) |
+| Velodrome V2 | Solidly Router | Optimism | Implemented, disabled (zero) |
+| Aerodrome | Solidly Router | Base | Implemented, disabled (hangs) |
+
+### Test Count: 571
