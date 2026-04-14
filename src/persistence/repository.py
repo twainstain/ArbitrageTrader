@@ -7,6 +7,7 @@ Each method maps to one stage in the architecture doc's candidate lifecycle:
 from __future__ import annotations
 
 import json
+import time as _time
 import uuid
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -30,6 +31,7 @@ class Repository:
 
     def __init__(self, conn: DbConnection) -> None:
         self.conn = conn
+        self._count_cache: tuple[float, str, str | None, int] | None = None  # (ts, since, status, count)
 
     # ------------------------------------------------------------------
     # Opportunities
@@ -76,7 +78,17 @@ class Repository:
         return [dict(r) for r in rows]
 
     def count_opportunities_since(self, since_iso: str, status: str | None = None) -> int:
-        """Count opportunities since a timestamp, optionally filtered by status."""
+        """Count opportunities since a timestamp, optionally filtered by status.
+
+        Result is cached for 5 seconds — the hourly trade count changes slowly
+        and doesn't need a fresh SELECT on every pipeline call.
+        """
+        now = _time.monotonic()
+        if self._count_cache is not None:
+            ts, cached_since, cached_status, cached_count = self._count_cache
+            if (now - ts) < 5.0 and cached_since == since_iso and cached_status == status:
+                return cached_count
+
         if status:
             row = self.conn.execute(
                 "SELECT COUNT(*) as cnt FROM opportunities WHERE detected_at >= ? AND status = ?",
@@ -87,7 +99,9 @@ class Repository:
                 "SELECT COUNT(*) as cnt FROM opportunities WHERE detected_at >= ?",
                 (since_iso,),
             ).fetchone()
-        return row["cnt"] if row else 0
+        count = row["cnt"] if row else 0
+        self._count_cache = (now, since_iso, status, count)
+        return count
 
     # ------------------------------------------------------------------
     # Pricing Results

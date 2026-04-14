@@ -412,5 +412,78 @@ class BatchCommitTests(unittest.TestCase):
         self.assertEqual(row[0], 268435456)
 
 
+class SQLitePragmaTests(unittest.TestCase):
+    """Tests for SQLite performance pragmas added in experiment 1."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.conn = init_db(self.tmp.name)
+
+    def tearDown(self) -> None:
+        close_db()
+        Path(self.tmp.name).unlink(missing_ok=True)
+
+    def test_cache_size_pragma(self) -> None:
+        row = self.conn.execute("PRAGMA cache_size").fetchone()
+        self.assertEqual(row[0], -8192)
+
+    def test_temp_store_memory_pragma(self) -> None:
+        row = self.conn.execute("PRAGMA temp_store").fetchone()
+        # MEMORY = 2
+        self.assertEqual(row[0], 2)
+
+
+class CountCacheTests(unittest.TestCase):
+    """Tests for Repository.count_opportunities_since caching."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.conn = init_db(self.tmp.name)
+        self.repo = Repository(self.conn)
+
+    def tearDown(self) -> None:
+        close_db()
+        Path(self.tmp.name).unlink(missing_ok=True)
+
+    def test_cache_returns_same_result(self) -> None:
+        self.repo.create_opportunity(
+            pair="WETH/USDC", chain="ethereum",
+            buy_dex="A", sell_dex="B", spread_bps=D("10"),
+        )
+        count1 = self.repo.count_opportunities_since("2020-01-01T00:00:00")
+        count2 = self.repo.count_opportunities_since("2020-01-01T00:00:00")
+        self.assertEqual(count1, 1)
+        self.assertEqual(count2, 1)
+
+    def test_cache_miss_on_different_status(self) -> None:
+        opp_id = self.repo.create_opportunity(
+            pair="WETH/USDC", chain="ethereum",
+            buy_dex="A", sell_dex="B", spread_bps=D("10"),
+        )
+        self.repo.update_opportunity_status(opp_id, "submitted")
+        count_all = self.repo.count_opportunities_since("2020-01-01T00:00:00")
+        count_submitted = self.repo.count_opportunities_since("2020-01-01T00:00:00", status="submitted")
+        self.assertEqual(count_all, 1)
+        self.assertEqual(count_submitted, 1)
+
+    def test_cache_populated_after_first_call(self) -> None:
+        self.repo.create_opportunity(
+            pair="WETH/USDC", chain="ethereum",
+            buy_dex="A", sell_dex="B", spread_bps=D("10"),
+        )
+        self.repo.count_opportunities_since("2020-01-01T00:00:00", status="submitted")
+        self.assertIsNotNone(self.repo._count_cache)
+
+    def test_cache_invalidates_on_different_since(self) -> None:
+        self.repo.create_opportunity(
+            pair="WETH/USDC", chain="ethereum",
+            buy_dex="A", sell_dex="B", spread_bps=D("10"),
+        )
+        count1 = self.repo.count_opportunities_since("2020-01-01T00:00:00")
+        count2 = self.repo.count_opportunities_since("2099-01-01T00:00:00")
+        self.assertEqual(count1, 1)
+        self.assertEqual(count2, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

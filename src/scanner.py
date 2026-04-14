@@ -114,25 +114,46 @@ class OpportunityScanner:
             return []
 
         results: list[Opportunity] = []
+        skipped_same_dex = 0
+        skipped_diff_pair = 0
+        skipped_unprofitable = 0
+        skipped_cross_chain = 0
+        skipped_low_liq = 0
+        evaluated = 0
+
         for buy_quote in quotes:
             for sell_quote in quotes:
                 if buy_quote.dex == sell_quote.dex:
+                    skipped_same_dex += 1
                     continue
                 if buy_quote.pair != sell_quote.pair:
+                    skipped_diff_pair += 1
                     continue
+                evaluated += 1
                 opp = self.strategy.evaluate_pair(buy_quote, sell_quote)
                 if opp is None:
+                    skipped_unprofitable += 1
                     continue
                 # Skip cross-chain opportunities — can't atomic execute.
                 if opp.is_cross_chain:
+                    skipped_cross_chain += 1
                     continue
                 # Skip if either pool has low estimated liquidity.
                 # $1M minimum ensures pools can absorb flash loan trade sizes
                 # without massive slippage. Pools below this produce fake spreads.
                 min_liq = min(buy_quote.liquidity_usd, sell_quote.liquidity_usd)
                 if min_liq > ZERO and min_liq < D("1000000"):
+                    skipped_low_liq += 1
                     continue
                 results.append(opp)
+
+        logger.info(
+            "[scanner] %d quotes → %d pairs evaluated | "
+            "unprofitable=%d cross_chain=%d low_liq=%d | %d passed",
+            len(quotes), evaluated,
+            skipped_unprofitable, skipped_cross_chain, skipped_low_liq,
+            len(results),
+        )
         return results
 
     def _composite_score(self, opp: Opportunity) -> float:

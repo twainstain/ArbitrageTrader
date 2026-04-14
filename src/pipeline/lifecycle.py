@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Protocol
 
@@ -262,5 +263,4 @@ class CandidatePipeline:
 
 
 def _one_hour_ago() -> str:
-    from datetime import datetime, timedelta, timezone
     return (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()

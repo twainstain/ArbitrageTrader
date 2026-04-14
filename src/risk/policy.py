@@ -105,6 +105,7 @@ class RiskPolicy:
             "warning_flags": list(opportunity.warning_flags),
             "buy_dex": opportunity.buy_dex,
             "sell_dex": opportunity.sell_dex,
+            "fee_included": opportunity.fees_pre_included,
         }
 
         # Rule 1: Global kill switch — simulation mode.

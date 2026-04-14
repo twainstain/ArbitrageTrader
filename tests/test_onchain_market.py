@@ -185,10 +185,11 @@ class OnChainMarketQuoteTests(unittest.TestCase):
         names = {q.dex for q in quotes}
         self.assertEqual(names, {"Uniswap-Eth", "Sushi-Eth"})
 
-    def test_buy_above_sell(self) -> None:
+    def test_buy_equals_sell_for_onchain(self) -> None:
+        """On-chain quotes have buy_price == sell_price (no synthetic spread)."""
         quotes = self._build_market_with_mocked_contracts()
         for q in quotes:
-            self.assertGreater(q.buy_price, q.sell_price)
+            self.assertEqual(q.buy_price, q.sell_price)
 
     def test_price_difference_reflected(self) -> None:
         """Both DEXs return quotes — with generic mock, prices are the same.
@@ -206,10 +207,13 @@ class OnChainMarketQuoteTests(unittest.TestCase):
         for q in quotes:
             self.assertEqual(q.pair, "WETH/USDC")
 
-    def test_fee_bps_correct(self) -> None:
+    def test_fee_bps_reflects_actual_tier(self) -> None:
+        """fee_bps should reflect the winning pool fee tier, not the config value."""
         quotes = self._build_market_with_mocked_contracts()
         for q in quotes:
-            self.assertEqual(q.fee_bps, 30.0)
+            # Actual fee tier from the quoter (e.g. 500 → 5 bps, 3000 → 30 bps).
+            self.assertGreater(q.fee_bps, 0)
+            self.assertTrue(q.fee_included)
 
 
 class OnChainMarketBalancerTests(unittest.TestCase):
@@ -348,11 +352,12 @@ class FeeTierCacheTests(unittest.TestCase):
 
         with patch("onchain_market.Web3") as w3:
             w3.to_checksum_address = lambda x: x
-            result = self.market._try_fee_tiers(
+            amount, fee_tier = self.market._try_fee_tiers(
                 "test:eth", quoter, "0xweth", "0xusdc",
                 10**18, (100, 500, 3000, 10000),
             )
-        self.assertGreater(result, 0)
+        self.assertGreater(amount, 0)
+        self.assertIn(fee_tier, (100, 500, 3000, 10000))
         self.assertEqual(call_count, 4)  # All 4 tiers tried
         self.assertIn("test:eth", self.market._best_fee)
 
@@ -372,11 +377,12 @@ class FeeTierCacheTests(unittest.TestCase):
 
         with patch("onchain_market.Web3") as w3:
             w3.to_checksum_address = lambda x: x
-            result = self.market._try_fee_tiers(
+            amount, fee_tier = self.market._try_fee_tiers(
                 "test:eth", quoter, "0xweth", "0xusdc",
                 10**18, (100, 500, 3000, 10000),
             )
-        self.assertGreater(result, 0)
+        self.assertGreater(amount, 0)
+        self.assertEqual(fee_tier, 500)  # Used cached tier
         self.assertEqual(call_count, 1)  # Only cached tier tried
 
     def test_stale_cache_retries_all_tiers(self) -> None:

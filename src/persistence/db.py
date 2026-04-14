@@ -241,6 +241,8 @@ def _connect_sqlite(path: str) -> DbConnection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA mmap_size=268435456")
+    conn.execute("PRAGMA cache_size=-8192")
+    conn.execute("PRAGMA temp_store=MEMORY")
     conn.execute("PRAGMA foreign_keys=ON")
     return DbConnection(conn, "sqlite")
 

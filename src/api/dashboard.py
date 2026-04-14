@@ -526,67 +526,103 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
             'Updated At': o.updated_at,
         });
 
-        // Pricing
+        // Pricing — cost waterfall breakdown
         const p = data.pricing;
         if (p) {
-            html += renderSection('Pricing', {
-                'Input Amount': '$' + num(p.input_amount, 2),
-                'Estimated Output': '$' + num(p.estimated_output, 2),
-                'DEX Fee Cost': '$' + num(p.fee_cost, 4),
-                'Slippage Cost': '$' + num(p.slippage_cost, 4),
-                'Gas Estimate': num(p.gas_estimate, 6),
-                'Expected Net Profit': num(p.expected_net_profit, 6),
-                'Priced At': p.created_at,
-            });
+            const inp = Number(p.input_amount || 0);
+            const out = Number(p.estimated_output || 0);
+            const fee = Number(p.fee_cost || 0);
+            const slip = Number(p.slippage_cost || 0);
+            const gas = Number(p.gas_estimate || 0);
+            const net = Number(p.expected_net_profit || 0);
+            const netUsd = (net * 2220).toFixed(2);
+            const netColor = net > 0 ? '#3fb950' : '#f85149';
+
+            html += `<h2>Cost Breakdown</h2><div class="section">
+            <table>
+                <tr><th>Buy Cost (input)</th><td class="mono">$${inp.toFixed(2)}</td></tr>
+                <tr><th>Sell Proceeds (output)</th><td class="mono">$${out.toFixed(2)}</td></tr>
+                <tr style="border-top:1px solid #30363d">
+                    <th>Gross Spread</th>
+                    <td class="mono">$${(out - inp).toFixed(2)}</td></tr>
+                <tr><th style="padding-left:30px">- DEX Fees</th>
+                    <td class="mono" style="color:#f85149">-$${fee.toFixed(4)}</td></tr>
+                <tr><th style="padding-left:30px">- Slippage</th>
+                    <td class="mono" style="color:#f85149">-$${slip.toFixed(4)}</td></tr>
+                <tr><th style="padding-left:30px">- Gas</th>
+                    <td class="mono" style="color:#f85149">-${gas.toFixed(6)} ETH</td></tr>
+                <tr style="border-top:2px solid #58a6ff">
+                    <th style="font-size:14px;color:#f0f6fc">Net Profit</th>
+                    <td class="mono" style="font-size:16px;font-weight:bold;color:${netColor}">
+                        ${net.toFixed(6)} ETH (~$${netUsd})
+                    </td></tr>
+            </table>
+            <div style="margin-top:8px;color:#484f58;font-size:11px">Priced at ${p.created_at || 'n/a'}</div>
+            </div>`;
         } else {
-            html += renderSection('Pricing', null);
+            html += renderSection('Cost Breakdown', null);
         }
 
         // Risk Decision
         const r = data.risk_decision;
         if (r) {
-            // Parse thresholds JSON string into object for better display.
             let thresholds = r.threshold_snapshot;
             let details = {};
             try { details = typeof thresholds === 'string' ? JSON.parse(thresholds) : thresholds; } catch(e) {}
 
-            // Determine verdict display based on reason_code.
             const isSimApproved = r.reason_code === 'simulation_approved';
-            const isApproved = r.approved || isSimApproved;
             const verdictTag = isSimApproved
                 ? '<span class="tag tag-approved">SIMULATION APPROVED</span>'
                 : r.approved
                     ? '<span class="tag tag-approved">APPROVED</span>'
                     : '<span class="tag tag-rejected">REJECTED</span>';
 
-            const verdictFields = {
-                'Verdict': verdictTag,
-                'Reason': r.reason_code,
-            };
+            let riskHtml = `<h2>Risk Decision</h2><div class="section"><table>
+                <tr><th>Verdict</th><td class="mono">${verdictTag}</td></tr>
+                <tr><th>Reason</th><td class="mono">${r.reason_code}</td></tr>`;
 
-            // Show the human-readable detail if available.
-            if (details.reason_detail) {
-                verdictFields['Detail'] = details.reason_detail;
+            if (details.reason_detail)
+                riskHtml += `<tr><th>Detail</th><td class="mono">${details.reason_detail}</td></tr>`;
+
+            riskHtml += `<tr style="border-top:1px solid #30363d"><th colspan="2" style="color:#58a6ff;padding-top:12px">Analysis</th></tr>`;
+
+            if (details.net_profit !== undefined)
+                riskHtml += `<tr><th>Net Profit</th><td class="mono">${num(details.net_profit, 6)} ETH</td></tr>`;
+            if (details.gross_spread_pct !== undefined)
+                riskHtml += `<tr><th>Gross Spread</th><td class="mono">${num(details.gross_spread_pct, 4)}%</td></tr>`;
+
+            // Fee breakdown
+            const hasFees = details.dex_fees || details.flash_loan_fee || details.slippage_cost || details.gas_cost;
+            if (hasFees) {
+                riskHtml += `<tr style="border-top:1px solid #30363d"><th colspan="2" style="color:#58a6ff;padding-top:12px">Fee Components</th></tr>`;
+                if (details.dex_fees && details.dex_fees !== '0')
+                    riskHtml += `<tr><th>DEX Fees</th><td class="mono">$${num(details.dex_fees, 4)}</td></tr>`;
+                if (details.fee_included !== undefined)
+                    riskHtml += `<tr><th>Fee Pre-Included</th><td class="mono">${details.fee_included ? '<span style="color:#3fb950">Yes</span> (on-chain quoter)' : 'No (calculated)'}</td></tr>`;
+                if (details.flash_loan_fee && details.flash_loan_fee !== '0')
+                    riskHtml += `<tr><th>Flash Loan Fee</th><td class="mono">$${num(details.flash_loan_fee, 4)}</td></tr>`;
+                if (details.slippage_cost && details.slippage_cost !== '0')
+                    riskHtml += `<tr><th>Slippage</th><td class="mono">$${num(details.slippage_cost, 4)}</td></tr>`;
+                if (details.gas_cost && details.gas_cost !== '0')
+                    riskHtml += `<tr><th>Gas Cost</th><td class="mono">${num(details.gas_cost, 6)} ETH</td></tr>`;
             }
 
-            // Show key financial metrics from the analysis.
-            if (details.net_profit) verdictFields['Net Profit'] = num(details.net_profit, 6);
-            if (details.gross_spread_pct) verdictFields['Spread'] = num(details.gross_spread_pct, 4) + '%';
-            if (details.dex_fees && details.dex_fees !== '0') verdictFields['DEX Fees'] = '$' + num(details.dex_fees, 4);
-            if (details.flash_loan_fee && details.flash_loan_fee !== '0') verdictFields['Flash Loan Fee'] = '$' + num(details.flash_loan_fee, 4);
-            if (details.slippage_cost && details.slippage_cost !== '0') verdictFields['Slippage'] = '$' + num(details.slippage_cost, 4);
-            if (details.gas_cost && details.gas_cost !== '0') verdictFields['Gas Cost'] = num(details.gas_cost, 6);
-            if (details.liquidity_score !== undefined) verdictFields['Liquidity Score'] = details.liquidity_score;
-            if (details.warning_flags && details.warning_flags.length > 0) {
-                verdictFields['Warning Flags'] = details.warning_flags.join(', ');
-            }
-            if (details.simulation) {
-                verdictFields['Mode'] = '<span class="tag tag-approved">SIMULATION</span> — would execute if live';
+            // Risk signals
+            const hasRiskSignals = details.liquidity_score !== undefined || (details.warning_flags && details.warning_flags.length > 0);
+            if (hasRiskSignals) {
+                riskHtml += `<tr style="border-top:1px solid #30363d"><th colspan="2" style="color:#58a6ff;padding-top:12px">Risk Signals</th></tr>`;
+                if (details.liquidity_score !== undefined)
+                    riskHtml += `<tr><th>Liquidity Score</th><td class="mono">${details.liquidity_score}</td></tr>`;
+                if (details.warning_flags && details.warning_flags.length > 0)
+                    riskHtml += `<tr><th>Warning Flags</th><td class="mono" style="color:#f85149">${details.warning_flags.join(', ')}</td></tr>`;
             }
 
-            verdictFields['Decided At'] = r.created_at;
+            if (details.simulation)
+                riskHtml += `<tr><th>Mode</th><td class="mono"><span class="tag tag-approved">SIMULATION</span> — would execute if live</td></tr>`;
 
-            html += renderSection('Risk Decision', verdictFields);
+            riskHtml += `<tr style="border-top:1px solid #30363d"><th>Decided At</th><td class="mono">${r.created_at}</td></tr>`;
+            riskHtml += '</table></div>';
+            html += riskHtml;
         } else {
             html += renderSection('Risk Decision', null);
         }

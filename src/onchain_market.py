@@ -174,8 +174,12 @@ class OnChainMarket:
     def _try_fee_tiers(
         self, cache_key: str, quoter, weth: str, usdc: str,
         amount_in: int, fee_tiers: tuple[int, ...],
-    ) -> int:
-        """Try fee tiers with caching. Returns best amount_out (0 if all fail).
+    ) -> tuple[int, int]:
+        """Try fee tiers with caching.
+
+        Returns ``(best_amount_out, winning_fee_tier)``.  Returns ``(0, 0)``
+        if all tiers fail.  The winning fee tier is in raw pool units
+        (e.g. 500 = 5 bps, 3000 = 30 bps).
 
         On first call (or every 60s), tries all tiers and caches the best.
         On subsequent calls, tries only the cached tier (1 RPC instead of 4).
@@ -193,13 +197,13 @@ class OnChainMarket:
         # Use cached tier if fresh (< 60s old).
         if cached is not None and (_time.monotonic() - cached[1]) < 60.0:
             try:
-                return _call_tier(cached[0])
+                return _call_tier(cached[0]), cached[0]
             except Exception:
                 pass  # Cached tier failed — fall through to full sweep.
 
         # Full sweep — try all tiers, cache the best.
         best_out = 0
-        best_fee = fee_tiers[0]
+        best_fee = 0
         for fee in fee_tiers:
             try:
                 out = _call_tier(fee)
@@ -210,7 +214,7 @@ class OnChainMarket:
                 continue
         if best_out > 0:
             self._best_fee[cache_key] = (best_fee, _time.monotonic())
-        return best_out
+        return best_out, best_fee
 
     # ------------------------------------------------------------------
     # Public interface
@@ -236,7 +240,7 @@ class OnChainMarket:
                     f"Cannot resolve {self.config.pair} token addresses on {chain}."
                 )
 
-            def _do_quote() -> Decimal:
+            def _do_quote() -> tuple[Decimal, Decimal]:
                 if dex_type == "uniswap_v3":
                     return self._quote_uniswap_v3(chain, base_addr, quote_addr)
                 elif dex_type == "sushi_v3":
@@ -254,35 +258,27 @@ class OnChainMarket:
                 raise OnChainMarketError(f"Unknown dex_type: {dex_type}")
 
             # Try once, on RPC failure rotate to next endpoint and retry once.
-            # Single retry balances speed vs resilience: catches transient RPC
-            # issues without adding latency for persistent failures (chain down).
             try:
-                mid = _do_quote()
+                mid, actual_fee_bps = _do_quote()
             except OnChainMarketError:
                 raise
             except Exception:
                 self._rotate_rpc(chain)
-                mid = _do_quote()
+                mid, actual_fee_bps = _do_quote()
 
             mid = _validate_price(mid, dex.name, chain)  # type: ignore[union-attr]
 
-            # Skip price impact check — doubles RPC calls per DEX and causes
-            # hangs on rate-limited RPCs. The outlier filter in bot.py catches
-            # most bad quotes, and the min_spread_pct rule in risk policy
-            # rejects thin spreads.
-            estimated_liquidity = D("0")
-
-            # Model bid-ask spread as symmetric around mid: buy = mid + half, sell = mid - half.
-            # The DEX fee tier approximates the full spread (market maker compensation).
-            # In reality buy/sell may differ, but symmetric is acceptable for arb detection.
-            half_spread = mid * (dex.fee_bps / BPS_DIVISOR / TWO)  # type: ignore[union-attr]
+            # On-chain quoters return output AFTER the pool fee is deducted.
+            # Set fee_included=True so strategy.evaluate_pair skips its own
+            # fee adjustment.  fee_bps carries the actual pool fee tier for
+            # display/logging (not for further deduction).
             return MarketQuote(
                 dex=dex.name,  # type: ignore[union-attr]
                 pair=self.config.pair,
-                buy_price=mid + half_spread,
-                sell_price=mid - half_spread,
-                fee_bps=dex.fee_bps,  # type: ignore[union-attr]
-                liquidity_usd=estimated_liquidity,
+                buy_price=mid,
+                sell_price=mid,
+                fee_bps=actual_fee_bps,
+                fee_included=True,
             )
 
         # Fetch all DEX quotes in parallel.
@@ -504,15 +500,13 @@ class OnChainMarket:
 
     def _quote_uniswap_v3(
         self, chain: str, weth: str, usdc: str
-    ) -> Decimal:
-        """Get WETH/USDC mid-price from Uniswap V3 QuoterV2.
+    ) -> tuple[Decimal, Decimal]:
+        """Get WETH/USDC price from Uniswap V3 QuoterV2.
 
-        Tries all standard Uniswap V3 fee tiers and returns the best quote
-        (highest output = deepest liquidity pool for this pair).
+        Returns ``(price, actual_fee_bps)``.  The price already has the pool
+        fee deducted (the quoter simulates the real swap).
 
-        Fee tiers: 100 (0.01%), 500 (0.05%), 3000 (0.30%), 10000 (1.00%).
-        Liquidity varies by chain: Ethereum majors concentrate in 500 bps,
-        Polygon in 500, Arbitrum in 3000. We try all and pick the best.
+        Fee tiers: 100 (1 bps), 500 (5 bps), 3000 (30 bps), 10000 (100 bps).
         """
         w3 = self._w3[chain]
         quoter_addr = UNISWAP_V3_QUOTER_PER_CHAIN.get(chain, UNISWAP_V3_QUOTER_V2)
@@ -521,7 +515,7 @@ class OnChainMarket:
             abi=UNISWAP_V3_QUOTER_ABI,
         )
         amount_in = 10 ** WETH_DECIMALS
-        best_out = self._try_fee_tiers(
+        best_out, fee_tier = self._try_fee_tiers(
             f"uniswap_v3:{chain}", quoter, weth, usdc,
             amount_in, (100, 500, 3000, 10000),
         )
@@ -529,14 +523,15 @@ class OnChainMarket:
             raise OnChainMarketError(
                 f"Uniswap V3 returned zero for all fee tiers on {chain}."
             )
-        return D(best_out) / D(10 ** USDC_DECIMALS)
+        actual_fee_bps = D(fee_tier) / D("100")
+        return D(best_out) / D(10 ** USDC_DECIMALS), actual_fee_bps
 
     def _quote_sushi_v3(
         self, chain: str, weth: str, usdc: str
-    ) -> Decimal:
-        """Get WETH/USDC mid-price from SushiSwap V3 QuoterV2.
+    ) -> tuple[Decimal, Decimal]:
+        """Get WETH/USDC price from SushiSwap V3 QuoterV2.
 
-        Tries all standard fee tiers and returns the best quote.
+        Returns ``(price, actual_fee_bps)``.
         """
         quoter_addr = SUSHI_V3_QUOTER.get(chain)
         if quoter_addr is None:
@@ -550,7 +545,7 @@ class OnChainMarket:
             abi=SUSHI_V3_QUOTER_ABI,
         )
         amount_in = 10 ** WETH_DECIMALS
-        best_out = self._try_fee_tiers(
+        best_out, fee_tier = self._try_fee_tiers(
             f"sushi_v3:{chain}", quoter, weth, usdc,
             amount_in, (100, 500, 3000, 10000),
         )
@@ -558,19 +553,15 @@ class OnChainMarket:
             raise OnChainMarketError(
                 f"SushiSwap V3 returned zero for all fee tiers on {chain}."
             )
-        return D(best_out) / D(10 ** USDC_DECIMALS)
+        actual_fee_bps = D(fee_tier) / D("100")
+        return D(best_out) / D(10 ** USDC_DECIMALS), actual_fee_bps
 
     def _quote_pancakeswap_v3(
         self, chain: str, weth: str, usdc: str
-    ) -> Decimal:
-        """Get WETH/USDC mid-price from PancakeSwap V3 QuoterV2.
+    ) -> tuple[Decimal, Decimal]:
+        """Get WETH/USDC price from PancakeSwap V3 QuoterV2.
 
-        PancakeSwap V3 is a Uniswap V3 fork — same QuoterV2 interface,
-        different contract addresses.  This is the video's recommended
-        second DEX alongside Uniswap.
-
-        Tries multiple fee tiers and returns the best quote (most output),
-        since different pairs have liquidity concentrated in different tiers.
+        Returns ``(price, actual_fee_bps)``.
         """
         quoter_addr = PANCAKE_V3_QUOTER.get(chain)
         if quoter_addr is None:
@@ -584,7 +575,7 @@ class OnChainMarket:
             abi=PANCAKE_V3_QUOTER_ABI,
         )
         amount_in = 10 ** WETH_DECIMALS
-        best_out = self._try_fee_tiers(
+        best_out, fee_tier = self._try_fee_tiers(
             f"pancakeswap_v3:{chain}", quoter, weth, usdc,
             amount_in, (100, 500, 2500, 10000),
         )
@@ -592,13 +583,17 @@ class OnChainMarket:
             raise OnChainMarketError(
                 f"PancakeSwap V3 returned zero for all fee tiers on {chain}."
             )
-
-        return D(best_out) / D(10 ** USDC_DECIMALS)
+        actual_fee_bps = D(fee_tier) / D("100")
+        return D(best_out) / D(10 ** USDC_DECIMALS), actual_fee_bps
 
     def _quote_balancer_v2(
         self, chain: str, weth: str, usdc: str
-    ) -> Decimal:
-        """Get WETH/USDC mid-price from Balancer V2 Vault queryBatchSwap."""
+    ) -> tuple[Decimal, Decimal]:
+        """Get WETH/USDC price from Balancer V2 Vault queryBatchSwap.
+
+        Returns ``(price, fee_bps)``.  Balancer fees are dynamic per pool;
+        the returned fee_bps is an estimate (typically 10-30 bps).
+        """
         pool_id = BALANCER_POOL_IDS.get(chain)
         if pool_id is None:
             raise OnChainMarketError(
@@ -650,15 +645,15 @@ class OnChainMarket:
                 f"Balancer queryBatchSwap returned non-negative USDC delta: {usdc_delta}"
             )
         amount_out = abs(usdc_delta)
-        return D(amount_out) / D(10 ** USDC_DECIMALS)
+        return D(amount_out) / D(10 ** USDC_DECIMALS), D("10")  # ~10 bps typical
 
     def _quote_quickswap_v3(
         self, chain: str, weth: str, usdc: str
-    ) -> Decimal:
-        """Get WETH/USDC mid-price from QuickSwap V3 (Algebra) Quoter.
+    ) -> tuple[Decimal, Decimal]:
+        """Get WETH/USDC price from QuickSwap V3 (Algebra) Quoter.
 
-        QuickSwap uses Algebra protocol — different interface from Uniswap V3:
-        no fee parameter (auto-detected from pool), flat args (not tuple).
+        Returns ``(price, fee_bps)``.  Algebra uses dynamic fees; we report
+        an estimate.
         """
         quoter_addr = QUICKSWAP_QUOTER.get(chain)
         if quoter_addr is None:
@@ -685,14 +680,14 @@ class OnChainMarket:
             raise OnChainMarketError(
                 f"QuickSwap returned zero on {chain}."
             )
-        return D(amount_out) / D(10 ** USDC_DECIMALS)
+        return D(amount_out) / D(10 ** USDC_DECIMALS), D("15")  # ~15 bps typical
 
     def _quote_camelot_v3(
         self, chain: str, weth: str, usdc: str
-    ) -> Decimal:
-        """Get mid-price from Camelot V3 (Algebra) Quoter on Arbitrum.
+    ) -> tuple[Decimal, Decimal]:
+        """Get price from Camelot V3 (Algebra) Quoter on Arbitrum.
 
-        Same interface as QuickSwap — Algebra protocol, no fee parameter.
+        Returns ``(price, fee_bps)``.  Algebra dynamic fee; estimate reported.
         """
         quoter_addr = CAMELOT_QUOTER.get(chain)
         if quoter_addr is None:
@@ -719,15 +714,15 @@ class OnChainMarket:
             raise OnChainMarketError(
                 f"Camelot returned zero on {chain}."
             )
-        return D(amount_out) / D(10 ** USDC_DECIMALS)
+        return D(amount_out) / D(10 ** USDC_DECIMALS), D("15")  # ~15 bps typical
 
     def _quote_velodrome(
         self, chain: str, weth: str, usdc: str, dex_type: str
-    ) -> Decimal:
-        """Get mid-price from Velodrome V2 (Optimism) or Aerodrome (Base).
+    ) -> tuple[Decimal, Decimal]:
+        """Get price from Velodrome V2 (Optimism) or Aerodrome (Base).
 
-        Uses getAmountsOut with a Route struct. Tries both volatile and stable
-        pool types, returns the best quote.
+        Returns ``(price, fee_bps)``.  Uses getAmountsOut with a Route struct.
+        Tries both volatile and stable pool types, returns the best.
         """
         if dex_type == "aerodrome":
             router_addr = AERODROME_ROUTER.get(chain)
@@ -771,4 +766,4 @@ class OnChainMarket:
                 f"{'Aerodrome' if dex_type == 'aerodrome' else 'Velodrome'} "
                 f"returned zero on {chain}."
             )
-        return D(best_out) / D(10 ** USDC_DECIMALS)
+        return D(best_out) / D(10 ** USDC_DECIMALS), D("20")  # ~20 bps typical

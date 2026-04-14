@@ -10,7 +10,10 @@ import time
 from decimal import Decimal
 
 from config import BotConfig
+from log import get_logger
 from models import BPS_DIVISOR, ONE, ZERO, MarketQuote, Opportunity
+
+logger = get_logger(__name__)
 
 D = Decimal
 
@@ -57,6 +60,23 @@ class ArbitrageStrategy:
         if len(quotes) < 2:
             return None
 
+        # Log price range to surface spread visibility.
+        by_pair: dict[str, list[MarketQuote]] = {}
+        for q in quotes:
+            by_pair.setdefault(q.pair, []).append(q)
+        for pair_name, pq in by_pair.items():
+            prices = sorted(pq, key=lambda q: q.buy_price)
+            low, high = prices[0], prices[-1]
+            spread_bps = (
+                (high.sell_price - low.buy_price) / low.buy_price * D("10000")
+                if low.buy_price > ZERO else ZERO
+            )
+            logger.info(
+                "[strategy] %s: %d quotes, cheapest=%s(%.2f) dearest=%s(%.2f) raw_spread=%.1f bps",
+                pair_name, len(pq), low.dex, low.buy_price,
+                high.dex, high.buy_price, spread_bps,
+            )
+
         best_opportunity: Opportunity | None = None
         for buy_quote in quotes:
             for sell_quote in quotes:
@@ -86,17 +106,28 @@ class ArbitrageStrategy:
           3. slippage_cost       — estimated market impact
           4. flash_fee           — flash loan provider fee (e.g. Aave 9 bps)
           5. gas_cost            — estimated on-chain gas, subtracted in base asset units
+
+        When ``fee_included`` is True on a quote, the price already reflects
+        the pool fee (on-chain quoters return post-fee output).  In that case
+        we skip the fee adjustment to avoid double-counting — fee_bps is
+        carried for display only.
         """
         trade_size = self.config.trade_size
         buy_cost_quote = trade_size * buy_quote.buy_price
         sell_proceeds_quote = trade_size * sell_quote.sell_price
 
-        # Buy side: divide by (1 - fee) to get the total amount owed including the
-        # DEX fee.  This is the inverse of _apply_fee — we need *more* quote to end
-        # up with the same base amount after the DEX takes its cut.
-        buy_cost_with_fee = buy_cost_quote / (ONE - buy_quote.fee_bps / BPS_DIVISOR)
-        # Sell side: straightforward reduction — DEX keeps fee_bps of proceeds.
-        sell_proceeds_after_fee = _apply_fee(sell_proceeds_quote, sell_quote.fee_bps)
+        # Buy side: if fees are already included in the quoted price, the
+        # cost IS buy_cost_quote.  Otherwise gross up for the DEX fee.
+        if buy_quote.fee_included:
+            buy_cost_with_fee = buy_cost_quote
+        else:
+            buy_cost_with_fee = buy_cost_quote / (ONE - buy_quote.fee_bps / BPS_DIVISOR)
+
+        # Sell side: if fees are already included, proceeds are final.
+        if sell_quote.fee_included:
+            sell_proceeds_after_fee = sell_proceeds_quote
+        else:
+            sell_proceeds_after_fee = _apply_fee(sell_proceeds_quote, sell_quote.fee_bps)
 
         # Use liquidity-aware slippage when pool data is available.
         # We use min(buy, sell) liquidity as the bottleneck — the thinnest pool
@@ -128,6 +159,14 @@ class ArbitrageStrategy:
 
         is_actionable = net_profit_base > self.config.min_profit_base
         if not is_actionable:
+            logger.debug(
+                "[strategy] %s buy@%s(%.2f) sell@%s(%.2f) → "
+                "gross=%.6f net_base=%.6f < min_profit=%.6f SKIP",
+                buy_quote.pair, buy_quote.dex, buy_quote.buy_price,
+                sell_quote.dex, sell_quote.sell_price,
+                gross_profit_quote, net_profit_base,
+                self.config.min_profit_base,
+            )
             return None
 
         # Gross spread as a percentage of the buy price.
@@ -136,8 +175,14 @@ class ArbitrageStrategy:
             (sell_quote.sell_price - buy_quote.buy_price) / buy_quote.buy_price * HUNDRED
             if buy_quote.buy_price > ZERO else ZERO
         )
-        # Total DEX fee cost = buy fee markup + sell fee reduction.
-        dex_fee_cost_quote = (buy_cost_with_fee - buy_cost_quote) + (sell_proceeds_quote - sell_proceeds_after_fee)
+        # Total DEX fee cost.  When fees are pre-included, estimate from
+        # fee_bps for display (the actual deduction is already in the price).
+        if buy_quote.fee_included or sell_quote.fee_included:
+            buy_fee_est = buy_cost_quote * (buy_quote.fee_bps / BPS_DIVISOR) if buy_quote.fee_included else (buy_cost_with_fee - buy_cost_quote)
+            sell_fee_est = sell_proceeds_quote * (sell_quote.fee_bps / BPS_DIVISOR) if sell_quote.fee_included else (sell_proceeds_quote - sell_proceeds_after_fee)
+            dex_fee_cost_quote = buy_fee_est + sell_fee_est
+        else:
+            dex_fee_cost_quote = (buy_cost_with_fee - buy_cost_quote) + (sell_proceeds_quote - sell_proceeds_after_fee)
 
         # --- Risk flag assessment (per scanner doc warning flags) ---
         # Thresholds are empirically derived from DeFi market conditions:
@@ -202,4 +247,5 @@ class ArbitrageStrategy:
             warning_flags=tuple(flags),
             liquidity_score=liquidity_score,
             chain=chain,
+            fees_pre_included=buy_quote.fee_included or sell_quote.fee_included,
         )

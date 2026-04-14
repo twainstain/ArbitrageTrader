@@ -42,6 +42,7 @@ _NON_DECIMAL_FIELDS = frozenset({
     "dex", "pair", "buy_dex", "sell_dex", "venue_type", "strategy_type",
     "reason", "is_actionable", "warning_flags", "success",
     "quote_timestamp", "liquidity_score", "opportunity", "chain",
+    "fee_included", "fees_pre_included",
 })
 
 
@@ -80,6 +81,11 @@ class MarketQuote:
     buy_price: Decimal
     sell_price: Decimal
     fee_bps: Decimal
+    # True when the quoted prices already include DEX fees (on-chain quoters
+    # return post-fee amounts).  When True, strategy.evaluate_pair skips its
+    # own fee adjustment to avoid double-counting.  fee_bps is still set to
+    # the actual pool fee tier for display/logging purposes.
+    fee_included: bool = False
     # Enriched fields for risk assessment and ranking (per scanner doc).
     volume_usd: Decimal = ZERO       # 24h trading volume in USD
     liquidity_usd: Decimal = ZERO    # Total liquidity / TVL in USD
@@ -113,6 +119,7 @@ class Opportunity:
     liquidity_score: float = 1.0      # 0.0–1.0 ranking metric (not financial — stays float)
     strategy_type: str = "cross_exchange"
     chain: str = ""                   # chain where this opportunity exists
+    fees_pre_included: bool = False   # True when DEX fees were already in the quoted prices
 
     def __post_init__(self) -> None:
         _coerce_decimals(self)
