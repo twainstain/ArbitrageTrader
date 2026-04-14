@@ -36,7 +36,6 @@
     {"name": "Sushi-Base",         "base_price": 0, "fee_bps": 30.0, "volatility_bps": 0, "chain": "base",     "dex_type": "sushi_v3"},
     {"name": "Pancake-Base",       "base_price": 0, "fee_bps": 25.0, "volatility_bps": 0, "chain": "base",     "dex_type": "pancakeswap_v3"},
 
-    {"name": "Uniswap-Optimism",   "base_price": 0, "fee_bps": 5.0,  "volatility_bps": 0, "chain": "optimism", "dex_type": "uniswap_v3"},
-    {"name": "Sushi-Optimism",     "base_price": 0, "fee_bps": 30.0, "volatility_bps": 0, "chain": "optimism", "dex_type": "sushi_v3"}
+    {"name": "Uniswap-Optimism",   "base_price": 0, "fee_bps": 5.0,  "volatility_bps": 0, "chain": "optimism", "dex_type": "uniswap_v3"}
   ]
 }

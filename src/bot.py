@@ -81,7 +81,7 @@ class ArbitrageBot:
         return result
 
     @staticmethod
-    def _filter_outliers(quotes: list[MarketQuote], max_deviation: Decimal = D("0.5")) -> list[MarketQuote]:
+    def _filter_outliers(quotes: list[MarketQuote], max_deviation: Decimal = D("0.05")) -> list[MarketQuote]:
         """Remove quotes whose mid-price deviates more than max_deviation from the pair median.
 
         Uses median (not mean) because median is robust to outliers — one garbage
@@ -96,20 +96,29 @@ class ArbitrageBot:
         for q in quotes:
             by_pair[q.pair].append(q)
 
+        # Compute a GLOBAL median per pair across ALL chains/DEXes.
+        # This catches thin pools even when a chain has only 2 DEXes:
+        # if Sushi-Optimism returns $2161 but the global median is $2364,
+        # the 8.6% deviation gets it filtered.
+        global_median: dict[str, Decimal] = {}
+        for pair, pqs in by_pair.items():
+            mids = [(q.buy_price + q.sell_price) / TWO for q in pqs]
+            if mids:
+                global_median[pair] = statistics.median(mids)
+
         filtered: list[MarketQuote] = []
         for pair, pqs in by_pair.items():
             if len(pqs) < 2:
                 filtered.extend(pqs)
                 continue
 
-            mids = [(q.buy_price + q.sell_price) / TWO for q in pqs]
-            # statistics.median works on Decimal values.
-            median = statistics.median(mids)
+            median = global_median.get(pair, ZERO)
             if median == ZERO:
                 filtered.extend(pqs)
                 continue
 
-            for q, mid in zip(pqs, mids):
+            for q in pqs:
+                mid = (q.buy_price + q.sell_price) / TWO
                 deviation = abs(mid - median) / median
                 if deviation <= max_deviation:
                     filtered.append(q)
