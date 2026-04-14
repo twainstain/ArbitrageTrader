@@ -51,6 +51,7 @@ BACKUP_RPC_URLS: dict[str, list[str]] = {
     "optimism": ["https://mainnet.optimism.io", "https://rpc.ankr.com/optimism", "https://1rpc.io/op"],
     "bsc": ["https://bsc-dataseed.binance.org", "https://bsc-dataseed1.defibit.io"],
 }
+from data.liquidity_cache import LiquidityCache
 from models import BPS_DIVISOR, MarketQuote
 from tokens import CHAIN_TOKENS
 
@@ -99,9 +100,11 @@ class OnChainMarket:
         self,
         config: BotConfig,
         rpc_overrides: dict[str, str] | None = None,
+        liquidity_cache: LiquidityCache | None = None,
     ) -> None:
         self.config = config
         self._rpc_overrides = rpc_overrides or {}
+        self.liquidity_cache = liquidity_cache or LiquidityCache()
 
         # Pre-build web3 instances keyed by chain, with failover URLs.
         self._w3: dict[str, Web3] = {}
@@ -244,19 +247,37 @@ class OnChainMarket:
 
         # Fetch all DEX quotes in parallel.
         # Failed DEXs are logged and skipped — one bad RPC shouldn't kill the scan.
+        # Low-liquidity pairs are cached and skipped for 3 hours.
         quotes: list[MarketQuote] = []
+        cache = self.liquidity_cache
 
-        with ThreadPoolExecutor(max_workers=len(self.config.dexes)) as pool:
-            futures = {pool.submit(_fetch_one, dex): dex for dex in self.config.dexes}
+        # Filter out cached low-liquidity pairs before making RPC calls.
+        active_dexes = []
+        for dex in self.config.dexes:
+            if cache.should_skip(dex.name, dex.chain or ""):  # type: ignore[union-attr]
+                _logger.debug("Cache skip: %s on %s", dex.name, dex.chain)
+            else:
+                active_dexes.append(dex)
+
+        if not active_dexes:
+            _logger.warning("All DEXes cached as low-liquidity — returning empty quotes")
+            return quotes
+
+        with ThreadPoolExecutor(max_workers=len(active_dexes)) as pool:
+            futures = {pool.submit(_fetch_one, dex): dex for dex in active_dexes}
             for future in as_completed(futures):
                 dex = futures[future]
                 try:
                     quotes.append(future.result())
                 except Exception as exc:
-                    import logging
-                    logging.getLogger(__name__).warning(
+                    _logger.warning(
                         "Skipping %s on %s: %s",
                         dex.name, dex.chain, exc,  # type: ignore[union-attr]
+                    )
+                    # Cache zero-quote / error pairs so we don't retry every scan.
+                    cache.mark_skip(
+                        dex.name, dex.chain or "",  # type: ignore[union-attr]
+                        str(exc),
                     )
 
         return quotes
