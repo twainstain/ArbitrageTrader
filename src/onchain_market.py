@@ -15,6 +15,7 @@ Usage::
 
 from __future__ import annotations
 
+import time as _time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from decimal import Decimal
 
@@ -110,6 +111,8 @@ class OnChainMarket:
         self._w3: dict[str, Web3] = {}
         self._rpc_urls: dict[str, list[str]] = {}  # chain → list of URLs for failover
         self._rpc_index: dict[str, int] = {}  # chain → current URL index
+        # Cache best fee tier per (dex_type, chain) — avoids trying all 4 tiers each scan.
+        self._best_fee: dict[str, tuple[int, float]] = {}  # key → (fee, timestamp)
 
         for dex in config.dexes:
             chain = dex.chain
@@ -159,6 +162,47 @@ class OnChainMarket:
         new_url = urls[idx]
         self._w3[chain] = Web3(Web3.HTTPProvider(new_url))
         _logger.info("RPC failover for %s → %s", chain, new_url[:50])
+
+    def _try_fee_tiers(
+        self, cache_key: str, quoter, weth: str, usdc: str,
+        amount_in: int, fee_tiers: tuple[int, ...],
+    ) -> int:
+        """Try fee tiers with caching. Returns best amount_out (0 if all fail).
+
+        On first call (or every 60s), tries all tiers and caches the best.
+        On subsequent calls, tries only the cached tier (1 RPC instead of 4).
+        """
+        cached = self._best_fee.get(cache_key)
+        weth_cs = Web3.to_checksum_address(weth)
+        usdc_cs = Web3.to_checksum_address(usdc)
+
+        def _call_tier(fee: int) -> int:
+            result = quoter.functions.quoteExactInputSingle(
+                (weth_cs, usdc_cs, amount_in, fee, 0)
+            ).call()
+            return result[0]
+
+        # Use cached tier if fresh (< 60s old).
+        if cached is not None and (_time.monotonic() - cached[1]) < 60.0:
+            try:
+                return _call_tier(cached[0])
+            except Exception:
+                pass  # Cached tier failed — fall through to full sweep.
+
+        # Full sweep — try all tiers, cache the best.
+        best_out = 0
+        best_fee = fee_tiers[0]
+        for fee in fee_tiers:
+            try:
+                out = _call_tier(fee)
+                if out > best_out:
+                    best_out = out
+                    best_fee = fee
+            except Exception:
+                continue
+        if best_out > 0:
+            self._best_fee[cache_key] = (best_fee, _time.monotonic())
+        return best_out
 
     # ------------------------------------------------------------------
     # Public interface
@@ -352,24 +396,10 @@ class OnChainMarket:
             abi=UNISWAP_V3_QUOTER_ABI,
         )
         amount_in = 10 ** WETH_DECIMALS
-
-        best_out = 0
-        for fee in (100, 500, 3000, 10000):
-            try:
-                result = quoter.functions.quoteExactInputSingle(
-                    (
-                        Web3.to_checksum_address(weth),
-                        Web3.to_checksum_address(usdc),
-                        amount_in,
-                        fee,
-                        0,
-                    )
-                ).call()
-                if result[0] > best_out:
-                    best_out = result[0]
-            except Exception:
-                continue
-
+        best_out = self._try_fee_tiers(
+            f"uniswap_v3:{chain}", quoter, weth, usdc,
+            amount_in, (100, 500, 3000, 10000),
+        )
         if best_out == 0:
             raise OnChainMarketError(
                 f"Uniswap V3 returned zero for all fee tiers on {chain}."
@@ -395,24 +425,10 @@ class OnChainMarket:
             abi=SUSHI_V3_QUOTER_ABI,
         )
         amount_in = 10 ** WETH_DECIMALS
-
-        best_out = 0
-        for fee in (100, 500, 3000, 10000):
-            try:
-                result = quoter.functions.quoteExactInputSingle(
-                    (
-                        Web3.to_checksum_address(weth),
-                        Web3.to_checksum_address(usdc),
-                        amount_in,
-                        fee,
-                        0,
-                    )
-                ).call()
-                if result[0] > best_out:
-                    best_out = result[0]
-            except Exception:
-                continue
-
+        best_out = self._try_fee_tiers(
+            f"sushi_v3:{chain}", quoter, weth, usdc,
+            amount_in, (100, 500, 3000, 10000),
+        )
         if best_out == 0:
             raise OnChainMarketError(
                 f"SushiSwap V3 returned zero for all fee tiers on {chain}."
@@ -443,29 +459,10 @@ class OnChainMarket:
             abi=PANCAKE_V3_QUOTER_ABI,
         )
         amount_in = 10 ** WETH_DECIMALS
-
-        # PancakeSwap V3 fee tiers — try all and take the best quote.
-        # Liquidity varies by tier; 500 (0.05%) is often deepest for majors.
-        fee_tiers = [100, 500, 2500, 10000]
-        best_out = 0
-
-        for fee in fee_tiers:
-            try:
-                result = quoter.functions.quoteExactInputSingle(
-                    (
-                        Web3.to_checksum_address(weth),
-                        Web3.to_checksum_address(usdc),
-                        amount_in,
-                        fee,
-                        0,
-                    )
-                ).call()
-                amount_out = result[0]
-                if amount_out > best_out:
-                    best_out = amount_out
-            except Exception:
-                continue
-
+        best_out = self._try_fee_tiers(
+            f"pancakeswap_v3:{chain}", quoter, weth, usdc,
+            amount_in, (100, 500, 2500, 10000),
+        )
         if best_out == 0:
             raise OnChainMarketError(
                 f"PancakeSwap V3 returned zero for all fee tiers on {chain}."
