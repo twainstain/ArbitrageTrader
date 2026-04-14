@@ -16,6 +16,7 @@ Usage::
 from __future__ import annotations
 
 import time as _time
+import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from decimal import Decimal
@@ -485,7 +486,6 @@ class OnChainMarket:
         # indefinitely.  15s = enough for 2 retries on slow chains
         # (Alchemy P99 ~2s), short enough to keep scan cadence <30s.
         # See commit 0d8e09b ("fix: 15s hard deadline with pool.shutdown").
-        import concurrent.futures
         done, not_done = concurrent.futures.wait(futures, timeout=15)
         for future in not_done:
             dex, pair_def, cache_dex, chain = futures[future]
