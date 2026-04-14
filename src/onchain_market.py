@@ -222,38 +222,11 @@ class OnChainMarket:
 
             mid = _validate_price(mid, dex.name, chain)  # type: ignore[union-attr]
 
-            # --- Thin pool detection: quote 10 WETH and compare per-unit price ---
-            # If quoting 10x the amount gives a significantly worse per-unit price,
-            # the pool has thin liquidity and the 1 WETH quote is misleading.
-            # This catches SushiSwap Optimism returning $2152 when the real market
-            # is $2364 — the pool has so little liquidity that even 1 WETH moves it.
+            # Skip price impact check — doubles RPC calls per DEX and causes
+            # hangs on rate-limited RPCs. The outlier filter in bot.py catches
+            # most bad quotes, and the min_spread_pct rule in risk policy
+            # rejects thin spreads.
             estimated_liquidity = D("0")
-            try:
-                large_mid = self._quote_large_amount(chain, base_addr, quote_addr, dex_type)
-                if large_mid > D("0") and mid > D("0"):
-                    # Per-unit price impact: how much worse is the 10x quote?
-                    impact_pct = abs(mid - large_mid) / mid * D("100")
-                    if impact_pct > D("5"):
-                        # >5% price impact at 10 WETH = very thin pool. Reject.
-                        msg = (
-                            f"{dex.name} on {chain}: thin pool — "  # type: ignore[union-attr]
-                            f"1 WETH=${float(mid):.0f}, 10 WETH=${float(large_mid):.0f} "
-                            f"({float(impact_pct):.1f}% impact)"
-                        )
-                        _logger.warning("Thin pool: %s", msg)
-                        raise OnChainMarketError(msg)
-                    elif impact_pct > D("2"):
-                        # 2-5% impact = moderate liquidity
-                        estimated_liquidity = mid * D("500") / max(impact_pct, D("1"))
-                    else:
-                        # <2% impact = deep pool
-                        estimated_liquidity = D("10000000")  # $10M+
-            except OnChainMarketError as thin_err:
-                # Thin pool → reject this DEX, cache for 3h.
-                # Cache it via the normal error path in get_quotes().
-                raise
-            except Exception:
-                pass  # RPC error on large quote — skip check, don't block
 
             # Model bid-ask spread as symmetric around mid: buy = mid + half, sell = mid - half.
             # The DEX fee tier approximates the full spread (market maker compensation).
