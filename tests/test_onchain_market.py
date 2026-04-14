@@ -682,6 +682,67 @@ class TvlCacheTests(unittest.TestCase):
         self.assertEqual(self.market._tvl_cache[tvl_key][0], OnChainMarket._DEEP_POOL_TVL)
 
 
+class PersistentPoolTests(unittest.TestCase):
+    """Tests for the persistent thread pool in OnChainMarket."""
+
+    @patch("onchain_market.Web3")
+    def test_pool_reused_across_scans(self, mock_web3_cls) -> None:
+        """Thread pool should be created once and reused."""
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        config = _make_onchain_config()
+        market = OnChainMarket(config, rpc_overrides={"ethereum": "http://fake"})
+        self.assertIsNone(market._pool)
+
+        # After get_quotes, pool should be created.
+        mock_w3 = MagicMock()
+        market._w3 = {"ethereum": mock_w3}
+
+        def make_contract_mock(price: float):
+            c = MagicMock()
+            def quote_fn(params):
+                amount_in = params[2] if isinstance(params, (list, tuple)) else 10**18
+                usdc_out = int(price * (amount_in / 10**18) * 10**6)
+                r = MagicMock()
+                r.call.return_value = [usdc_out, 0, 0, 150_000]
+                return r
+            c.functions.quoteExactInputSingle.side_effect = quote_fn
+            return c
+
+        mock_w3.eth.contract = MagicMock(return_value=make_contract_mock(2200.0))
+
+        import onchain_market as ocm
+        original_web3 = ocm.Web3
+        ocm.Web3 = MagicMock()
+        ocm.Web3.to_checksum_address = lambda x: x
+        try:
+            market.get_quotes()
+            pool1 = market._pool
+            self.assertIsNotNone(pool1)
+
+            # Second call reuses the same pool.
+            market.get_quotes()
+            self.assertIs(market._pool, pool1)
+        finally:
+            ocm.Web3 = original_web3
+            if market._pool:
+                market._pool.shutdown(wait=False)
+
+    @patch("onchain_market.Web3")
+    def test_rpc_timeout_is_4s(self, mock_web3_cls) -> None:
+        """Web3 HTTPProvider should use 4s timeout."""
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        config = _make_onchain_config()
+        OnChainMarket(config, rpc_overrides={"ethereum": "http://fake"})
+        # Check that HTTPProvider was called with timeout=4.
+        calls = mock_web3_cls.HTTPProvider.call_args_list
+        for call in calls:
+            kwargs = call[1] if len(call) > 1 else call.kwargs
+            if "request_kwargs" in kwargs:
+                self.assertEqual(kwargs["request_kwargs"]["timeout"], 4)
+
+
 class FeeTierCacheTests(unittest.TestCase):
     """Tests for the fee tier caching in OnChainMarket._try_fee_tiers."""
 

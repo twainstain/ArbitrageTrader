@@ -202,6 +202,8 @@ class OnChainMarket:
         # key: "dex_type:chain:base:quote" → (tvl_decimal, timestamp)
         self._tvl_cache: dict[str, tuple[Decimal, float]] = {}
         self._TVL_CACHE_TTL = 300.0  # 5 minutes
+        # Persistent thread pool — reused across scans to avoid thread creation overhead.
+        self._pool: ThreadPoolExecutor | None = None
 
         for dex in config.dexes:
             chain = dex.chain
@@ -235,7 +237,7 @@ class OnChainMarket:
                     urls.append(PUBLIC_RPC_URLS[chain])
                 self._rpc_urls[chain] = urls
                 self._rpc_index[chain] = 0
-                self._w3[chain] = Web3(Web3.HTTPProvider(urls[0], request_kwargs={"timeout": 8}))
+                self._w3[chain] = Web3(Web3.HTTPProvider(urls[0], request_kwargs={"timeout": 4}))
 
     def _resolve_pair_address(
         self,
@@ -272,7 +274,7 @@ class OnChainMarket:
         idx = (self._rpc_index.get(chain, 0) + 1) % len(urls)
         self._rpc_index[chain] = idx
         new_url = urls[idx]
-        self._w3[chain] = Web3(Web3.HTTPProvider(new_url, request_kwargs={"timeout": 8}))
+        self._w3[chain] = Web3(Web3.HTTPProvider(new_url, request_kwargs={"timeout": 4}))
         _logger.info("RPC failover for %s → %s", chain, new_url[:50])
 
     def _try_fee_tiers(
@@ -469,75 +471,68 @@ class OnChainMarket:
             _logger.warning("All DEXes cached as low-liquidity — returning empty quotes")
             return quotes
 
-        pool = ThreadPoolExecutor(max_workers=len(active_requests))
-        try:
-            futures = {
-                pool.submit(_fetch_one, dex, pair_def): (dex, pair_def, cache_dex, chain)
-                for dex, pair_def, cache_dex, chain in active_requests
-            }
-            # Hard 15s deadline on ALL RPC calls.  Added after production
-            # incidents where web3.py eth_call ignored the HTTP timeout
-            # (8s per request_kwargs) and blocked the entire thread pool
-            # indefinitely.  15s = enough for 2 retries on slow chains
-            # (Alchemy P99 ~2s), short enough to keep scan cadence <30s.
-            # See commit 0d8e09b ("fix: 15s hard deadline with pool.shutdown").
-            import concurrent.futures
-            done, not_done = concurrent.futures.wait(futures, timeout=15)
-            for future in not_done:
-                dex, pair_def, cache_dex, chain = futures[future]
-                _logger.warning("RPC timeout (15s): %s on %s for %s", dex.name, dex.chain, pair_def.pair_name)
-                future.cancel()
-                cache.mark_skip(
-                    cache_dex, chain,
-                    "RPC call exceeded 15s deadline",
-                    ttl_override=15 * 60,
+        # Reuse a persistent thread pool to avoid thread creation overhead (~1ms/thread).
+        # Size to the max concurrent requests seen so far.
+        needed = len(active_requests)
+        if self._pool is None or self._pool._max_workers < needed:
+            if self._pool is not None:
+                self._pool.shutdown(wait=False)
+            self._pool = ThreadPoolExecutor(max_workers=max(needed, 8))
+
+        futures = {
+            self._pool.submit(_fetch_one, dex, pair_def): (dex, pair_def, cache_dex, chain)
+            for dex, pair_def, cache_dex, chain in active_requests
+        }
+        # Hard 8s deadline — with 4s per-request timeout, this allows one
+        # retry on failover. Tighter than the old 15s to keep scan cadence fast.
+        import concurrent.futures
+        done, not_done = concurrent.futures.wait(futures, timeout=8)
+        for future in not_done:
+            dex, pair_def, cache_dex, chain = futures[future]
+            _logger.warning("RPC timeout (8s): %s on %s for %s", dex.name, dex.chain, pair_def.pair_name)
+            future.cancel()
+            cache.mark_skip(
+                cache_dex, chain,
+                "RPC call exceeded 8s deadline",
+                ttl_override=15 * 60,
+            )
+            if self.diagnostics:
+                from observability.quote_diagnostics import QuoteOutcome
+                self.diagnostics.record(
+                    dex.name, chain, pair_def.pair_name, QuoteOutcome.TIMEOUT,  # type: ignore[union-attr]
                 )
+        for future in done:
+            dex, pair_def, cache_dex, chain = futures[future]
+            try:
+                quotes.append(future.result())
                 if self.diagnostics:
                     from observability.quote_diagnostics import QuoteOutcome
                     self.diagnostics.record(
-                        dex.name, chain, pair_def.pair_name, QuoteOutcome.TIMEOUT,  # type: ignore[union-attr]
+                        dex.name, chain, pair_def.pair_name, QuoteOutcome.SUCCESS,  # type: ignore[union-attr]
                     )
-            for future in done:
-                dex, pair_def, cache_dex, chain = futures[future]
-                try:
-                    quotes.append(future.result())
-                    if self.diagnostics:
-                        from observability.quote_diagnostics import QuoteOutcome
-                        self.diagnostics.record(
-                            dex.name, chain, pair_def.pair_name, QuoteOutcome.SUCCESS,  # type: ignore[union-attr]
-                        )
-                except Exception as exc:
-                    _logger.warning(
-                        "Skipping %s on %s for %s: %s",
-                        dex.name, dex.chain, pair_def.pair_name, exc,  # type: ignore[union-attr]
+            except Exception as exc:
+                _logger.warning(
+                    "Skipping %s on %s for %s: %s",
+                    dex.name, dex.chain, pair_def.pair_name, exc,  # type: ignore[union-attr]
+                )
+                err_str = str(exc).lower()
+                is_transient = any(k in err_str for k in (
+                    "timeout", "timed out", "429", "rate limit",
+                    "connection", "refused", "reset",
+                ))
+                ttl = 15 * 60 if is_transient else None
+                cache.mark_skip(
+                    cache_dex, chain,
+                    str(exc),
+                    ttl_override=ttl,
+                )
+                if self.diagnostics:
+                    from observability.quote_diagnostics import QuoteOutcome
+                    outcome = QuoteOutcome.ZERO if "zero" in err_str else QuoteOutcome.ERROR
+                    self.diagnostics.record(
+                        dex.name, chain, pair_def.pair_name, outcome,  # type: ignore[union-attr]
+                        error_msg=str(exc)[:200],
                     )
-                    # Use shorter TTL for transient errors (timeout, rate limit)
-                    # so we retry sooner. Permanent errors (zero quotes, thin pool)
-                    # use the default 3h TTL.
-                    err_str = str(exc).lower()
-                    is_transient = any(k in err_str for k in (
-                        "timeout", "timed out", "429", "rate limit",
-                        "connection", "refused", "reset",
-                    ))
-                    # Transient errors (timeout, rate limit, connection reset):
-                    # retry after 15 min — the RPC may recover.
-                    # Permanent errors (zero quotes, thin pool, bad ABI):
-                    # skip for 3h (default TTL) — no point retrying quickly.
-                    ttl = 15 * 60 if is_transient else None
-                    cache.mark_skip(
-                        cache_dex, chain,
-                        str(exc),
-                        ttl_override=ttl,
-                    )
-                    if self.diagnostics:
-                        from observability.quote_diagnostics import QuoteOutcome
-                        outcome = QuoteOutcome.ZERO if "zero" in err_str else QuoteOutcome.ERROR
-                        self.diagnostics.record(
-                            dex.name, chain, pair_def.pair_name, outcome,  # type: ignore[union-attr]
-                            error_msg=str(exc)[:200],
-                        )
-        finally:
-            pool.shutdown(wait=False)  # Don't wait for hung threads
 
         return quotes
 
