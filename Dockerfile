@@ -34,8 +34,8 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"
 
-# Default: live scan with dashboard, dry-run (safe).
-CMD ["python", "-m", "run_live_with_dashboard", \
-     "--config", "config/live_config.json", \
-     "--iterations", "999999", \
-     "--sleep", "30"]
+# Default: on-chain event-driven scanner with dashboard.
+# Uses per-DEX RPC quotes for same-chain arbitrage detection.
+CMD ["python", "-m", "run_event_driven", \
+     "--config", "config/multichain_onchain_config.json", \
+     "--port", "8000"]
