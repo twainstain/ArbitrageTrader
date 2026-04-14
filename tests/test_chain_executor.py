@@ -292,7 +292,7 @@ class SolidlyExecutionGuardTests(unittest.TestCase):
             executor = ChainExecutor(config)
             with self.assertRaises(ChainExecutorError) as ctx:
                 executor._resolve_router("Velodrome-Optimism")
-            self.assertIn("Solidly", str(ctx.exception))
+            self.assertIn("only supports V3", str(ctx.exception))
 
     @patch("chain_executor.Web3")
     def test_resolve_router_rejects_aerodrome(self, mock_web3_cls) -> None:
@@ -323,7 +323,7 @@ class SolidlyExecutionGuardTests(unittest.TestCase):
             executor = ChainExecutor(config)
             with self.assertRaises(ChainExecutorError) as ctx:
                 executor._resolve_router("Aerodrome-Base")
-            self.assertIn("Solidly", str(ctx.exception))
+            self.assertIn("only supports V3", str(ctx.exception))
 
 
 class GasEstimationTests(unittest.TestCase):
@@ -438,6 +438,175 @@ class FlashbotsTests(unittest.TestCase):
         }):
             executor = ChainExecutor(arb_config)
             self.assertFalse(executor.use_flashbots)
+
+
+class ExecuteFlowTests(unittest.TestCase):
+    """Test the full execute() flow: simulate → sign → send → receipt."""
+
+    def _make_executor(self, mock_web3_cls):
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        mock_web3_cls.keccak = lambda data: b"\xaa" * 32
+        mock_w3.eth.account.from_key.return_value = MagicMock(address="0xfake_wallet")
+        mock_w3.to_wei = lambda v, u: v * 1_000_000_000
+
+        mock_contract = MagicMock()
+        call_data = MagicMock()
+        call_data.estimate_gas.return_value = 300_000
+        call_data.build_transaction.return_value = {
+            "data": "0xcalldata", "from": "0xfake_wallet",
+            "to": "0xcontract", "nonce": 0, "gas": 360_000,
+            "maxFeePerGas": 50_000_000_000, "maxPriorityFeePerGas": 2_000_000_000,
+        }
+        mock_contract.functions.executeArbitrage.return_value = call_data
+        mock_w3.eth.contract.return_value = mock_contract
+        mock_w3.eth.get_transaction_count.return_value = 42
+        mock_w3.eth.fee_history.return_value = {
+            "baseFeePerGas": [20_000_000_000],
+            "reward": [[1_000_000_000, 2_000_000_000, 3_000_000_000]],
+        }
+        # sign_transaction returns an object with rawTransaction.
+        signed = MagicMock()
+        signed.rawTransaction = b"\xcc" * 100
+        mock_w3.eth.account.sign_transaction.return_value = signed
+
+        with patch.dict("os.environ", {
+            "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+            "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
+        }):
+            executor = ChainExecutor(_make_config())
+        return executor, mock_w3
+
+    @patch("chain_executor.Web3")
+    def test_execute_success(self, mock_web3_cls) -> None:
+        executor, mock_w3 = self._make_executor(mock_web3_cls)
+        mock_w3.eth.call.return_value = b""
+        mock_w3.eth.send_raw_transaction.return_value = b"\xbb" * 32
+        mock_w3.eth.wait_for_transaction_receipt.return_value = {
+            "status": 1, "blockNumber": 12345,
+        }
+
+        result = executor.execute(_make_opportunity())
+        self.assertTrue(result.success)
+        self.assertIn("tx:", result.reason)
+
+    @patch("chain_executor.Web3")
+    def test_execute_simulation_failure_skips(self, mock_web3_cls) -> None:
+        executor, mock_w3 = self._make_executor(mock_web3_cls)
+        mock_w3.eth.call.side_effect = Exception("execution reverted: profit below minimum")
+
+        result = executor.execute(_make_opportunity())
+        self.assertFalse(result.success)
+        self.assertIn("simulation_failed", result.reason)
+        self.assertIn("profit_below_minimum", result.reason)
+        mock_w3.eth.send_raw_transaction.assert_not_called()
+
+    @patch("chain_executor.Web3")
+    def test_execute_tx_reverted(self, mock_web3_cls) -> None:
+        executor, mock_w3 = self._make_executor(mock_web3_cls)
+        mock_w3.eth.call.return_value = b""
+        mock_w3.eth.send_raw_transaction.return_value = b"\xbb" * 32
+        mock_w3.eth.wait_for_transaction_receipt.return_value = {
+            "status": 0, "blockNumber": 12345,
+        }
+
+        result = executor.execute(_make_opportunity())
+        self.assertFalse(result.success)
+        self.assertIn("tx_reverted", result.reason)
+
+    @patch("chain_executor.Web3")
+    def test_execute_exception_returns_error(self, mock_web3_cls) -> None:
+        executor, mock_w3 = self._make_executor(mock_web3_cls)
+        # Simulation passes but send_raw_transaction raises.
+        mock_w3.eth.call.return_value = b""
+        mock_w3.eth.send_raw_transaction.side_effect = ConnectionError("RPC down")
+
+        result = executor.execute(_make_opportunity())
+        self.assertFalse(result.success)
+        self.assertIn("error:", result.reason)
+        self.assertEqual(result.realized_profit_base, 0)
+
+
+class SimulateTransactionTests(unittest.TestCase):
+    @patch("chain_executor.Web3")
+    def test_simulate_success(self, mock_web3_cls) -> None:
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        mock_w3.eth.account.from_key.return_value = MagicMock(address="0xfake")
+        mock_w3.eth.call.return_value = b""
+
+        with patch.dict("os.environ", {
+            "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+            "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
+        }):
+            executor = ChainExecutor(_make_config())
+
+        ok, reason = executor._simulate_transaction({
+            "from": "0xfake", "to": "0xcontract", "data": "0x", "value": 0,
+        })
+        self.assertTrue(ok)
+        self.assertEqual(reason, "ok")
+
+    @patch("chain_executor.Web3")
+    def test_simulate_revert_extracts_reason(self, mock_web3_cls) -> None:
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        mock_w3.eth.account.from_key.return_value = MagicMock(address="0xfake")
+        mock_w3.eth.call.side_effect = Exception("execution reverted: Profit Below Minimum")
+
+        with patch.dict("os.environ", {
+            "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+            "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
+        }):
+            executor = ChainExecutor(_make_config())
+
+        ok, reason = executor._simulate_transaction({
+            "from": "0xfake", "to": "0xcontract", "data": "0x",
+        })
+        self.assertFalse(ok)
+        self.assertEqual(reason, "profit_below_minimum")
+
+
+class ResolveFeeTests(unittest.TestCase):
+    @patch("chain_executor.Web3")
+    def test_resolve_fee_converts_bps_to_tier(self, mock_web3_cls) -> None:
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        mock_w3.eth.account.from_key.return_value = MagicMock(address="0xfake")
+
+        with patch.dict("os.environ", {
+            "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+            "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
+        }):
+            executor = ChainExecutor(_make_config())
+
+        # 30 bps → 3000, 25 bps → 2500
+        self.assertEqual(executor._resolve_fee("Uniswap"), 3000)
+        self.assertEqual(executor._resolve_fee("PancakeSwap"), 2500)
+
+    @patch("chain_executor.Web3")
+    def test_resolve_fee_default_for_unknown(self, mock_web3_cls) -> None:
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        mock_w3.eth.account.from_key.return_value = MagicMock(address="0xfake")
+
+        with patch.dict("os.environ", {
+            "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+            "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
+        }):
+            executor = ChainExecutor(_make_config())
+
+        self.assertEqual(executor._resolve_fee("UnknownDEX"), 3000)
 
 
 if __name__ == "__main__":

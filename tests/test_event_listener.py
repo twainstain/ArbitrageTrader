@@ -265,6 +265,139 @@ class ScannerIntegrationTests(unittest.TestCase):
         self.assertEqual(len(listener.scanner.recent_history), 1)
 
 
+class PollOnceErrorHandlingTests(unittest.TestCase):
+    """Test _poll_once gracefully handles RPC and market errors."""
+
+    @patch("event_listener.OnChainMarket")
+    @patch("event_listener.Web3")
+    def test_rpc_log_fetch_error_advances_block(self, mock_web3_cls, mock_market_cls) -> None:
+        """If get_logs raises, _poll_once should advance _last_block and not crash."""
+        mock_w3 = MagicMock()
+        mock_w3.eth.block_number = 110
+        mock_w3.eth.get_logs.side_effect = Exception("RPC timeout")
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+
+        config = _make_onchain_config()
+        listener = SwapEventListener(config)
+        listener._last_block = 100
+
+        # Should not raise.
+        listener._poll_once(["0xfake"])
+        # Block pointer should advance to avoid re-fetching the same range.
+        self.assertEqual(listener._last_block, 110)
+        self.assertEqual(listener._swap_count, 0)
+
+    @patch("event_listener.OnChainMarket")
+    @patch("event_listener.Web3")
+    def test_market_quote_error_does_not_crash(self, mock_web3_cls, mock_market_cls) -> None:
+        """If market.get_quotes() raises, _poll_once should log and continue."""
+        mock_w3 = MagicMock()
+        mock_w3.eth.block_number = 105
+        mock_w3.eth.get_logs.return_value = [{"fake": "log"}]
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+
+        mock_market = MagicMock()
+        mock_market.get_quotes.side_effect = Exception("RPC error fetching quotes")
+        mock_market_cls.return_value = mock_market
+
+        config = _make_onchain_config()
+        listener = SwapEventListener(config)
+        listener._last_block = 100
+        listener.market = mock_market
+
+        # Should not raise.
+        listener._poll_once(["0xfake"])
+        self.assertEqual(listener._swap_count, 1)
+        self.assertEqual(listener._opportunity_count, 0)
+
+
+class DryRunVsExecuteTests(unittest.TestCase):
+    """Verify dry_run mode skips execution while live mode calls executor."""
+
+    @patch("event_listener.OnChainMarket")
+    @patch("event_listener.Web3")
+    def test_dry_run_skips_execution(self, mock_web3_cls, mock_market_cls) -> None:
+        from models import MarketQuote
+
+        mock_w3 = MagicMock()
+        mock_w3.eth.block_number = 105
+        mock_w3.eth.get_logs.return_value = [{"fake": "log"}]
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+
+        mock_market = MagicMock()
+        mock_market.get_quotes.return_value = [
+            MarketQuote(dex="Uni", pair="WETH/USDC", buy_price=3001.0, sell_price=2999.0, fee_bps=0.0),
+            MarketQuote(dex="Pancake", pair="WETH/USDC", buy_price=3081.0, sell_price=3079.0, fee_bps=0.0),
+        ]
+        mock_market_cls.return_value = mock_market
+
+        config = _make_onchain_config()
+        listener = SwapEventListener(config, dry_run=True)
+        listener._last_block = 100
+        listener.market = mock_market
+
+        # Mock executor to track calls.
+        listener.executor = MagicMock()
+
+        listener._poll_once(["0xfake"])
+
+        # In dry_run, executor.execute should NOT be called.
+        listener.executor.execute.assert_not_called()
+        # But opportunity should still be counted.
+        self.assertEqual(listener._opportunity_count, 1)
+
+    @patch("event_listener.OnChainMarket")
+    @patch("event_listener.Web3")
+    def test_live_mode_calls_executor(self, mock_web3_cls, mock_market_cls) -> None:
+        from decimal import Decimal as D
+        from models import MarketQuote, ExecutionResult, Opportunity, ZERO
+
+        mock_w3 = MagicMock()
+        mock_w3.eth.block_number = 105
+        mock_w3.eth.get_logs.return_value = [{"fake": "log"}]
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+
+        mock_market = MagicMock()
+        mock_market.get_quotes.return_value = [
+            MarketQuote(dex="Uni", pair="WETH/USDC", buy_price=3001.0, sell_price=2999.0, fee_bps=0.0),
+            MarketQuote(dex="Pancake", pair="WETH/USDC", buy_price=3081.0, sell_price=3079.0, fee_bps=0.0),
+        ]
+        mock_market_cls.return_value = mock_market
+
+        config = _make_onchain_config()
+        listener = SwapEventListener(config, dry_run=False)
+        listener._last_block = 100
+        listener.market = mock_market
+
+        # Mock executor to return a real ExecutionResult (log.py needs dataclass).
+        mock_executor = MagicMock()
+        # Build a real ExecutionResult so log_execution can serialize it.
+        dummy_opp = Opportunity(
+            pair="WETH/USDC", buy_dex="Uni", sell_dex="Pancake",
+            trade_size=1, cost_to_buy_quote=3001, proceeds_from_sell_quote=3079,
+            gross_profit_quote=78, net_profit_quote=70, net_profit_base=D("0.02"),
+        )
+        mock_result = ExecutionResult(
+            success=True, reason="test", realized_profit_base=ZERO, opportunity=dummy_opp,
+        )
+        mock_executor.execute.return_value = mock_result
+        listener.executor = mock_executor
+
+        listener._poll_once(["0xfake"])
+
+        # In live mode, executor.execute SHOULD be called.
+        mock_executor.execute.assert_called_once()
+        self.assertEqual(listener._executed_count, 1)
+
+
 class MonitoredPoolsExpandedTests(unittest.TestCase):
     def test_optimism_has_weth_usdc(self) -> None:
         from registry.monitored_pools import MONITORED_POOLS
