@@ -120,8 +120,21 @@ class LatencyTracker:
             self._file.write(json.dumps(record) + "\n")
             self._file.flush()
 
-    def record_scan_summary(self, quote_count: int, opp_count: int) -> None:
-        """Record scan-level summary."""
+    def record_scan_summary(
+        self,
+        quote_count: int,
+        opp_count: int,
+        rejected_count: int = 0,
+        status: str = "no_opportunity",
+    ) -> None:
+        """Record scan-level summary for EVERY cycle (not just pipeline hits).
+
+        Args:
+            quote_count: number of quotes fetched from RPC
+            opp_count: number of opportunities that passed all filters
+            rejected_count: number of opportunities rejected by scanner
+            status: overall scan result — "no_opportunity", "queued", "market_error"
+        """
         with self._lock:
             total_ms = (time.monotonic() - self._scan.started_at) * 1000
             record = {
@@ -130,6 +143,8 @@ class LatencyTracker:
                 "scan_index": self._scan.scan_index,
                 "quote_count": quote_count,
                 "opportunity_count": opp_count,
+                "rejected_count": rejected_count,
+                "status": status,
                 "scan_marks_ms": dict(self._scan.marks),
                 "total_scan_ms": round(total_ms, 2),
             }

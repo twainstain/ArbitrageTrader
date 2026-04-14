@@ -294,6 +294,9 @@ class EventDrivenScanner:
                 logger.error("Market error: %s", exc)
                 self.breaker.record_rpc_error()
                 self.metrics.record_opportunity_rejected("market_error")
+                if self.latency_tracker:
+                    self.latency_tracker.mark("rpc_fetch")
+                    self.latency_tracker.record_scan_summary(0, 0, status="market_error")
                 time.sleep(self.poll_interval)
                 continue
 
@@ -301,6 +304,8 @@ class EventDrivenScanner:
                 self.latency_tracker.mark("rpc_fetch")
 
             if len(quotes) < 2:
+                if self.latency_tracker:
+                    self.latency_tracker.record_scan_summary(len(quotes), 0, status="insufficient_quotes")
                 time.sleep(self.poll_interval)
                 continue
 
@@ -370,6 +375,15 @@ class EventDrivenScanner:
                 )
             else:
                 logger.debug("[scan %d] %d quotes → no opportunities", scan_count, len(quotes))
+
+            # Record scan summary for EVERY cycle — not just pipeline hits.
+            if self.latency_tracker:
+                self.latency_tracker.record_scan_summary(
+                    quote_count=len(quotes),
+                    opp_count=pushed,
+                    rejected_count=result.rejected_count,
+                    status="queued" if pushed > 0 else "no_opportunity",
+                )
 
             time.sleep(self.poll_interval)
 
