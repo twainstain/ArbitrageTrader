@@ -63,7 +63,9 @@ class BigWinTelegramTests(_AlertTestBase):
 
     def test_no_crash_when_telegram_unconfigured(self):
         tg = TelegramAlert(bot_token="", chat_id="")
-        alerter = SmartAlerter(repo=self.repo, telegram=tg)
+        dc = DiscordAlert(webhook_url="")
+        gm = GmailAlert(address="", app_password="", recipient="")
+        alerter = SmartAlerter(repo=self.repo, telegram=tg, discord=dc, gmail=gm)
         # Should not crash even for big spread.
         alerter.check_opportunity(
             spread_pct=D("10"), pair="WETH/USDC",
@@ -118,8 +120,10 @@ class BigWinDiscordTests(_AlertTestBase):
         self.assertTrue(any("discord" in u for u in urls))
 
     def test_no_crash_when_discord_unconfigured(self):
+        tg = TelegramAlert(bot_token="", chat_id="")
         dc = DiscordAlert(webhook_url="")
-        alerter = SmartAlerter(repo=self.repo, discord=dc)
+        gm = GmailAlert(address="", app_password="", recipient="")
+        alerter = SmartAlerter(repo=self.repo, telegram=tg, discord=dc, gmail=gm)
         alerter.check_opportunity(
             spread_pct=D("10"), pair="WETH/USDC",
             buy_dex="A", sell_dex="B", chain="ethereum", net_profit=0.05,
