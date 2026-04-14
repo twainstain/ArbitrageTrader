@@ -116,6 +116,10 @@ class OpportunityScanner:
 
         # Pre-compute per-chain medians for same-chain price consistency check.
         _chain_medians = self._compute_chain_medians(quotes)
+        # Pre-compute Decimal constants used in the inner loop to avoid
+        # repeated object creation (~0.5μs each × 200 iterations = ~0.1ms).
+        _MIN_LIQ = D("1000000")
+        _MAX_DEV = D("0.02")
 
         results: list[Opportunity] = []
         skipped_same_dex = 0
@@ -127,8 +131,6 @@ class OpportunityScanner:
         evaluated = 0
 
         # Pre-group quotes by pair to eliminate O(n^2) cross-pair comparisons.
-        # With 24 quotes across 3 pairs, this reduces iterations from 576 to
-        # ~3 * 8^2 = 192 (67% fewer).
         by_pair: dict[str, list[MarketQuote]] = {}
         for q in quotes:
             by_pair.setdefault(q.pair, []).append(q)
@@ -153,20 +155,20 @@ class OpportunityScanner:
                     sell_liq = sell_quote.liquidity_usd
                     min_liq = min(buy_liq, sell_liq)
                     max_liq = max(buy_liq, sell_liq)
-                    if min_liq > ZERO and min_liq < D("1000000"):
+                    if min_liq > ZERO and min_liq < _MIN_LIQ:
                         skipped_low_liq += 1
                         continue
                     if min_liq == ZERO and max_liq > ZERO:
                         skipped_low_liq += 1
                         continue
-                    if self._price_deviates_from_chain(buy_quote, _chain_medians, D("0.02")):
+                    if self._price_deviates_from_chain(buy_quote, _chain_medians, _MAX_DEV):
                         skipped_price_deviation += 1
                         logger.info(
                             "Price deviation: %s on %s deviates from chain median",
                             buy_quote.pair, buy_quote.dex,
                         )
                         continue
-                    if self._price_deviates_from_chain(sell_quote, _chain_medians, D("0.02")):
+                    if self._price_deviates_from_chain(sell_quote, _chain_medians, _MAX_DEV):
                         skipped_price_deviation += 1
                         logger.info(
                             "Price deviation: %s on %s deviates from chain median",
