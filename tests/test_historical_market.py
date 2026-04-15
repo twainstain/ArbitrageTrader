@@ -9,8 +9,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import BotConfig, DexConfig
-from historical_market import HistoricalMarket, HistoricalMarketError
+from core.config import BotConfig, DexConfig
+from market.historical_market import HistoricalMarket, HistoricalMarketError
 
 
 def _make_config() -> BotConfig:

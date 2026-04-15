@@ -16,9 +16,9 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import BotConfig, DexConfig
-from models import MarketQuote, Opportunity, ZERO
-from strategy import ArbitrageStrategy
+from core.config import BotConfig, DexConfig
+from core.models import MarketQuote, Opportunity, ZERO
+from strategy.arb_strategy import ArbitrageStrategy
 
 D = Decimal
 
@@ -236,7 +236,7 @@ class OnChainMarketFeeIncludedTests(unittest.TestCase):
     """Verify that OnChainMarket sets fee_included=True on all quotes."""
 
     def _build_quotes_with_mock(self) -> list:
-        from onchain_market import OnChainMarket
+        from market.onchain_market import OnChainMarket
 
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
@@ -269,7 +269,7 @@ class OnChainMarketFeeIncludedTests(unittest.TestCase):
         generic_contract = make_contract_mock(2200.0)
         mock_w3.eth.contract = lambda address, abi: generic_contract
 
-        with patch("onchain_market.Web3") as MockWeb3:
+        with patch("market.onchain_market.Web3") as MockWeb3:
             MockWeb3.HTTPProvider = MagicMock()
             MockWeb3.return_value = mock_w3
             MockWeb3.to_checksum_address = lambda x: x
@@ -277,9 +277,9 @@ class OnChainMarketFeeIncludedTests(unittest.TestCase):
 
         market._w3 = {"ethereum": mock_w3}
 
-        import onchain_market as ocm
+        import market.onchain_market as ocm
         original_web3 = ocm.Web3
-        with patch("onchain_market.Web3") as MockWeb3:
+        with patch("market.onchain_market.Web3") as MockWeb3:
             MockWeb3.to_checksum_address = lambda x: x
             ocm.Web3 = MockWeb3
             try:

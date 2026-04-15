@@ -25,9 +25,9 @@ import time
 from dataclasses import dataclass
 from decimal import Decimal
 
-from config import BotConfig, PairConfig
-from log import get_logger
-from models import ZERO, MarketQuote, Opportunity
+from core.config import BotConfig, PairConfig
+from observability.log import get_logger
+from core.models import ZERO, MarketQuote, Opportunity
 
 D = Decimal
 from strategy import ArbitrageStrategy

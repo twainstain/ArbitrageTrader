@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import NamedTuple
 
-from models import ZERO, Opportunity
+from core.models import ZERO, Opportunity
 
 D = Decimal
 

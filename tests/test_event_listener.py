@@ -6,8 +6,8 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import BotConfig, DexConfig, PairConfig
-from event_listener import SwapEventListener, SWAP_EVENT_TOPIC, SOLIDLY_SWAP_EVENT_TOPIC
+from core.config import BotConfig, DexConfig, PairConfig
+from strategy.event_listener import SwapEventListener, SWAP_EVENT_TOPIC, SOLIDLY_SWAP_EVENT_TOPIC
 from persistence.db import init_db, close_db
 from persistence.repository import Repository
 
@@ -49,8 +49,8 @@ class SwapEventTopicTests(unittest.TestCase):
 
 
 class SwapEventListenerInitTests(unittest.TestCase):
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_creates_with_valid_config(self, mock_web3_cls, mock_market_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -61,8 +61,8 @@ class SwapEventListenerInitTests(unittest.TestCase):
         self.assertEqual(listener.chain, "ethereum")
         self.assertTrue(listener.dry_run)
 
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_pools_to_monitor_returns_list(self, mock_web3_cls, mock_market_cls) -> None:
         mock_web3_cls.return_value = MagicMock()
         mock_web3_cls.HTTPProvider = MagicMock()
@@ -73,8 +73,8 @@ class SwapEventListenerInitTests(unittest.TestCase):
         self.assertIsInstance(pools, list)
         self.assertGreater(len(pools), 0)
 
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_pools_to_monitor_includes_extra_pairs_when_known(self, mock_web3_cls, mock_market_cls) -> None:
         mock_web3_cls.return_value = MagicMock()
         mock_web3_cls.HTTPProvider = MagicMock()
@@ -87,8 +87,8 @@ class SwapEventListenerInitTests(unittest.TestCase):
         pools = listener.pools_to_monitor
         self.assertGreaterEqual(len(pools), 3)
 
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_market_and_scanner_receive_pair_aware_config(self, mock_web3_cls, mock_market_cls) -> None:
         mock_web3_cls.return_value = MagicMock()
         mock_web3_cls.HTTPProvider = MagicMock()
@@ -111,8 +111,8 @@ class SwapEventListenerInitTests(unittest.TestCase):
         self.assertEqual([p.pair for p in market_pairs], ["WETH/USDC", "OP/USDC"])
         self.assertEqual(listener.scanner.strategy._pair_configs["OP/USDC"].chain, "optimism")
 
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_pools_to_monitor_prefers_repository_metadata(self, mock_web3_cls, mock_market_cls) -> None:
         mock_web3_cls.return_value = MagicMock()
         mock_web3_cls.HTTPProvider = MagicMock()
@@ -134,8 +134,8 @@ class SwapEventListenerInitTests(unittest.TestCase):
 
 
 class PollOnceTests(unittest.TestCase):
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_no_new_blocks_does_nothing(self, mock_web3_cls, mock_market_cls) -> None:
         mock_w3 = MagicMock()
         mock_w3.eth.block_number = 100
@@ -151,8 +151,8 @@ class PollOnceTests(unittest.TestCase):
         # No logs fetched since no new blocks.
         mock_w3.eth.get_logs.assert_not_called()
 
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_swap_detected_increments_count(self, mock_web3_cls, mock_market_cls) -> None:
         mock_w3 = MagicMock()
         mock_w3.eth.block_number = 105
@@ -180,8 +180,8 @@ class PollOnceTests(unittest.TestCase):
 class ScannerIntegrationTests(unittest.TestCase):
     """Verify that event listener uses OpportunityScanner for ranking/filtering."""
 
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_uses_scanner_not_raw_strategy(self, mock_web3_cls, mock_market_cls) -> None:
         """The listener should use scanner.scan_and_rank(), not strategy.find_best_opportunity()."""
         mock_web3_cls.return_value = MagicMock()
@@ -191,15 +191,15 @@ class ScannerIntegrationTests(unittest.TestCase):
         listener = SwapEventListener(config)
 
         # Verify it has a scanner attribute, not just a strategy
-        from scanner import OpportunityScanner
+        from strategy.scanner import OpportunityScanner
         self.assertIsInstance(listener.scanner, OpportunityScanner)
         self.assertFalse(hasattr(listener, "strategy"))
 
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_scanner_filters_low_quality_opportunities(self, mock_web3_cls, mock_market_cls) -> None:
         """Opportunities with too many warning flags should be rejected by the scanner."""
-        from models import MarketQuote
+        from core.models import MarketQuote
 
         mock_w3 = MagicMock()
         mock_w3.eth.block_number = 105
@@ -224,7 +224,7 @@ class ScannerIntegrationTests(unittest.TestCase):
         listener._last_block = 100
         listener.market = mock_market
         # Override scanner to be strict about flags.
-        from scanner import OpportunityScanner
+        from strategy.scanner import OpportunityScanner
         listener.scanner = OpportunityScanner(
             config, alert_max_warning_flags=0,
         )
@@ -235,11 +235,11 @@ class ScannerIntegrationTests(unittest.TestCase):
         # should cause rejection.
         self.assertEqual(listener._opportunity_count, 0)
 
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_scanner_tracks_history(self, mock_web3_cls, mock_market_cls) -> None:
         """Each poll should add to the scanner's scan history."""
-        from models import MarketQuote
+        from core.models import MarketQuote
 
         mock_w3 = MagicMock()
         mock_w3.eth.block_number = 105
@@ -268,8 +268,8 @@ class ScannerIntegrationTests(unittest.TestCase):
 class PollOnceErrorHandlingTests(unittest.TestCase):
     """Test _poll_once gracefully handles RPC and market errors."""
 
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_rpc_log_fetch_error_advances_block(self, mock_web3_cls, mock_market_cls) -> None:
         """If get_logs raises, _poll_once should advance _last_block and not crash."""
         mock_w3 = MagicMock()
@@ -289,8 +289,8 @@ class PollOnceErrorHandlingTests(unittest.TestCase):
         self.assertEqual(listener._last_block, 110)
         self.assertEqual(listener._swap_count, 0)
 
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_market_quote_error_does_not_crash(self, mock_web3_cls, mock_market_cls) -> None:
         """If market.get_quotes() raises, _poll_once should log and continue."""
         mock_w3 = MagicMock()
@@ -318,10 +318,10 @@ class PollOnceErrorHandlingTests(unittest.TestCase):
 class DryRunVsExecuteTests(unittest.TestCase):
     """Verify dry_run mode skips execution while live mode calls executor."""
 
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_dry_run_skips_execution(self, mock_web3_cls, mock_market_cls) -> None:
-        from models import MarketQuote
+        from core.models import MarketQuote
 
         mock_w3 = MagicMock()
         mock_w3.eth.block_number = 105
@@ -352,11 +352,11 @@ class DryRunVsExecuteTests(unittest.TestCase):
         # But opportunity should still be counted.
         self.assertEqual(listener._opportunity_count, 1)
 
-    @patch("event_listener.OnChainMarket")
-    @patch("event_listener.Web3")
+    @patch("strategy.event_listener.OnChainMarket")
+    @patch("strategy.event_listener.Web3")
     def test_live_mode_calls_executor(self, mock_web3_cls, mock_market_cls) -> None:
         from decimal import Decimal as D
-        from models import MarketQuote, ExecutionResult, Opportunity, ZERO
+        from core.models import MarketQuote, ExecutionResult, Opportunity, ZERO
 
         mock_w3 = MagicMock()
         mock_w3.eth.block_number = 105

@@ -22,10 +22,10 @@ from decimal import Decimal
 
 import requests
 
-from config import BotConfig, PairConfig
-from log import get_logger
-from models import BPS_DIVISOR, MarketQuote
-from tokens import CHAIN_TOKENS, TokenAddresses, defillama_coin_id
+from core.config import BotConfig, PairConfig
+from observability.log import get_logger
+from core.models import BPS_DIVISOR, MarketQuote
+from core.tokens import CHAIN_TOKENS, TokenAddresses, defillama_coin_id
 
 TWO = Decimal("2")
 

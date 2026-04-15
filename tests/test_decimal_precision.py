@@ -11,9 +11,9 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import BotConfig, DexConfig, PairConfig
-from models import MarketQuote, Opportunity, ExecutionResult, ZERO
-from strategy import ArbitrageStrategy
+from core.config import BotConfig, DexConfig, PairConfig
+from core.models import MarketQuote, Opportunity, ExecutionResult, ZERO
+from strategy.arb_strategy import ArbitrageStrategy
 
 D = Decimal
 

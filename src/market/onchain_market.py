@@ -23,10 +23,10 @@ from decimal import Decimal
 
 from web3 import Web3
 
-from config import BotConfig, PairConfig
+from core.config import BotConfig, PairConfig
 import logging
 
-from contracts import (
+from core.contracts import (
     AERODROME_ROUTER,
     ALGEBRA_V2_QUOTER_ABI,
     BALANCER_POOL_IDS,
@@ -66,8 +66,8 @@ BACKUP_RPC_URLS: dict[str, list[str]] = {
     "bsc": ["https://bsc-dataseed.binance.org", "https://bsc-dataseed1.defibit.io"],
 }
 from data.liquidity_cache import LiquidityCache
-from models import BPS_DIVISOR, ZERO, MarketQuote
-from tokens import CHAIN_TOKENS, token_decimals
+from core.models import BPS_DIVISOR, ZERO, MarketQuote
+from core.tokens import CHAIN_TOKENS, token_decimals
 
 D = Decimal
 TWO = D("2")
@@ -251,7 +251,7 @@ class OnChainMarket:
         symbol: str,
         discovered_address: str | None,
     ) -> str | None:
-        from tokens import resolve_token_address
+        from core.tokens import resolve_token_address
 
         if pair_def.pair_chain and pair_def.pair_chain != chain:
             return None
@@ -403,7 +403,7 @@ class OnChainMarket:
                 # Many Optimism/Arbitrum pools still use USDC.e/USDbC instead
                 # of native USDC.
                 if "returned zero" in str(e) and quote_addr:
-                    from tokens import CHAIN_TOKENS
+                    from core.tokens import CHAIN_TOKENS
                     tokens = CHAIN_TOKENS.get(chain)
                     fallback = getattr(tokens, "usdc_e", None) if tokens else None
                     if fallback and fallback != quote_addr:
@@ -779,7 +779,7 @@ class OnChainMarket:
             )
             best_out, _ = self._velo_best_route(router, LARGE_AMOUNT, base, quote, factory)
             if best_out == 0 and quote_symbol.upper() in ("USDC", "USDT"):
-                from tokens import bridged_usdc_address
+                from core.tokens import bridged_usdc_address
                 bridged = bridged_usdc_address(chain)
                 if bridged and bridged.lower() != quote.lower():
                     best_out, _ = self._velo_best_route(router, LARGE_AMOUNT, base, bridged, factory)
@@ -1091,7 +1091,7 @@ class OnChainMarket:
         # Also try bridged USDC and pick the better result.
         # Native USDC pools on Optimism are often thin; USDC.e has deeper liquidity.
         if quote_symbol.upper() in ("USDC", "USDT"):
-            from tokens import bridged_usdc_address
+            from core.tokens import bridged_usdc_address
             bridged = bridged_usdc_address(chain)
             if bridged and bridged.lower() != quote.lower():
                 bridged_out, bridged_stable = self._velo_best_route(

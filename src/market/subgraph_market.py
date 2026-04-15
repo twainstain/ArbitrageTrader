@@ -19,9 +19,9 @@ from decimal import Decimal
 
 import requests
 
-from config import BotConfig
-from models import BPS_DIVISOR, ZERO, MarketQuote
-from subgraphs import (
+from core.config import BotConfig
+from core.models import BPS_DIVISOR, ZERO, MarketQuote
+from market.subgraphs import (
     BALANCER_POOL_QUERY,
     BALANCER_V2_SUBGRAPH,
     POOL_CURRENT_QUERY,
@@ -126,7 +126,7 @@ class SubgraphMarket:
         if subgraph_id is None:
             raise SubgraphMarketError(f"No Balancer V2 subgraph for chain '{chain}'.")
 
-        from contracts import BALANCER_POOL_IDS
+        from core.contracts import BALANCER_POOL_IDS
 
         pool_id = BALANCER_POOL_IDS.get(chain)
         if pool_id is None:

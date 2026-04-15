@@ -63,7 +63,7 @@ from pathlib import Path
 
 import requests
 
-from subgraphs import (
+from market.subgraphs import (
     MESSARI_POOL_HOURLY_QUERY,
     NATIVE_SCHEMA_SUBGRAPHS,
     POOL_HOUR_DATA_QUERY,
@@ -358,7 +358,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    from env import load_env
+    from core.env import load_env
 
     load_env()
     args = build_parser().parse_args()

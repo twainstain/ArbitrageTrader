@@ -30,11 +30,11 @@ from decimal import Decimal
 
 from web3 import Web3
 
-from config import BotConfig
-from contracts import PUBLIC_RPC_URLS
-from env import get_rpc_overrides, load_env
-from executor import PaperExecutor
-from log import (
+from core.config import BotConfig
+from core.contracts import PUBLIC_RPC_URLS
+from core.env import get_rpc_overrides, load_env
+from execution.executor import PaperExecutor
+from observability.log import (
     get_logger,
     log_execution,
     log_scan,
@@ -42,14 +42,14 @@ from log import (
     log_summary,
     setup_logging,
 )
-from models import ZERO
-from onchain_market import OnChainMarket
+from core.models import ZERO
+from market.onchain_market import OnChainMarket
 from persistence.repository import Repository
 from persistence.db import init_db
 from registry.monitored_pools import MONITORED_POOLS, sync_monitored_pools
-from scanner import OpportunityScanner
+from strategy.scanner import OpportunityScanner
 from strategy import ArbitrageStrategy
-from config import PairConfig
+from core.config import PairConfig
 
 logger = get_logger(__name__)
 

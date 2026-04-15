@@ -7,10 +7,10 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from alerting.dispatcher import AlertDispatcher
-from bot import ArbitrageBot
-from config import BotConfig, DexConfig
-from market import SimulatedMarket
-from models import ExecutionResult, Opportunity, ZERO
+from execution.bot import ArbitrageBot
+from core.config import BotConfig, DexConfig
+from market.sim_market import SimulatedMarket
+from core.models import ExecutionResult, Opportunity, ZERO
 from decimal import Decimal
 
 D = Decimal

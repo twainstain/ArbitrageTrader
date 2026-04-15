@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from price_downloader import (
+from tools.price_downloader import (
     DownloadError,
     _parse_date,
     _resolve_subgraph_and_pool,
@@ -213,7 +213,7 @@ class MessariPriceDerivationTests(unittest.TestCase):
     """Test _derive_messari_price with different data scenarios."""
 
     def test_usd_values_populated(self) -> None:
-        from price_downloader import _derive_messari_price
+        from tools.price_downloader import _derive_messari_price
 
         snapshot = {
             "timestamp": "1700000000",
@@ -233,7 +233,7 @@ class MessariPriceDerivationTests(unittest.TestCase):
         self.assertLess(price, 3000)
 
     def test_tick_fallback_when_usd_is_zero(self) -> None:
-        from price_downloader import _derive_messari_price
+        from tools.price_downloader import _derive_messari_price
 
         # token0=WETH(18), token1=USDC(6) → tick is negative for WETH>$1.
         # raw_price = 1.0001^(-199357) ≈ 2.2e-9
@@ -255,7 +255,7 @@ class MessariPriceDerivationTests(unittest.TestCase):
         self.assertLess(price, 3000)
 
     def test_tick_zero(self) -> None:
-        from price_downloader import _derive_messari_price
+        from tools.price_downloader import _derive_messari_price
 
         snapshot = {
             "timestamp": "1700000000",
@@ -274,7 +274,7 @@ class MessariPriceDerivationTests(unittest.TestCase):
         self.assertGreater(price, 0)
 
     def test_usdc_as_token0_positive_tick(self) -> None:
-        from price_downloader import _derive_messari_price
+        from tools.price_downloader import _derive_messari_price
 
         # token0=USDC(6), token1=WETH(18) → tick is positive for WETH>$1.
         # raw_price = 1.0001^199357 ≈ 4.545e8
@@ -297,7 +297,7 @@ class MessariPriceDerivationTests(unittest.TestCase):
         self.assertLess(price, 3000)
 
     def test_balance_ratio_fallback(self) -> None:
-        from price_downloader import _derive_messari_price
+        from tools.price_downloader import _derive_messari_price
 
         # No USD values, no tick — falls back to balance ratio
         snapshot = {

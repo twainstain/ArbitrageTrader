@@ -10,7 +10,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from models import Opportunity, ZERO
+from core.models import Opportunity, ZERO
 from observability.metrics import MetricsCollector
 from persistence.db import init_db, close_db
 from persistence.repository import Repository
@@ -370,7 +370,7 @@ class CrossChainFilterTests(unittest.TestCase):
 class LiveExecutionStackTests(unittest.TestCase):
     @unittest.mock.patch.dict("os.environ", {}, clear=True)
     def test_build_execution_stack_returns_none_without_env(self):
-        from config import BotConfig, DexConfig
+        from core.config import BotConfig, DexConfig
 
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
@@ -394,11 +394,11 @@ class LiveExecutionStackTests(unittest.TestCase):
     @unittest.mock.patch("run_event_driven.ChainExecutorSubmitter")
     @unittest.mock.patch("run_event_driven.OpportunityAwareVerifier")
     @unittest.mock.patch("run_event_driven.ChainExecutorSimulator")
-    @unittest.mock.patch("chain_executor.ChainExecutor")
+    @unittest.mock.patch("execution.chain_executor.ChainExecutor")
     def test_build_execution_stack_returns_adapters_when_env_present(
         self, mock_exec_cls, mock_sim_cls, mock_ver_cls, mock_sub_cls
     ):
-        from config import BotConfig, DexConfig
+        from core.config import BotConfig, DexConfig
 
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
@@ -434,7 +434,7 @@ class LiveExecutionStackTests(unittest.TestCase):
         self.assertIs(ver, mock_ver)
 
     def test_compute_live_execution_summary_prefers_arbitrum_target(self):
-        from config import BotConfig, DexConfig
+        from core.config import BotConfig, DexConfig
 
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
@@ -464,7 +464,7 @@ class LiveExecutionStackTests(unittest.TestCase):
         "RPC_ARBITRUM": "https://arb.example",
     }, clear=True)
     def test_assess_launch_readiness_ready_for_arbitrum_only_supported_config(self):
-        from config import BotConfig, DexConfig
+        from core.config import BotConfig, DexConfig
 
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
@@ -489,7 +489,7 @@ class LiveExecutionStackTests(unittest.TestCase):
 
     @unittest.mock.patch.dict("os.environ", {}, clear=True)
     def test_assess_launch_readiness_flags_off_target_and_missing_env(self):
-        from config import BotConfig, DexConfig, PairConfig
+        from core.config import BotConfig, DexConfig, PairConfig
 
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",

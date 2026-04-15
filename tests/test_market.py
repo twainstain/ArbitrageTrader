@@ -4,8 +4,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import BotConfig, DexConfig
-from market import SimulatedMarket
+from core.config import BotConfig, DexConfig
+from market.sim_market import SimulatedMarket
 
 
 def _make_config(**overrides: object) -> BotConfig:

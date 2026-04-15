@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import BotConfig, DexConfig, FLASH_LOAN_PROVIDERS
+from core.config import BotConfig, DexConfig, FLASH_LOAN_PROVIDERS
 
 
 def _base_kwargs() -> dict:

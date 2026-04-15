@@ -8,10 +8,10 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from bot import ArbitrageBot
-from config import BotConfig, DexConfig, PairConfig
-from market import SimulatedMarket
-from strategy import ArbitrageStrategy
+from execution.bot import ArbitrageBot
+from core.config import BotConfig, DexConfig, PairConfig
+from market.sim_market import SimulatedMarket
+from strategy.arb_strategy import ArbitrageStrategy
 
 
 def _make_multi_pair_config(**overrides) -> BotConfig:
@@ -185,7 +185,7 @@ class StrategyWithMultiPairQuotesTests(unittest.TestCase):
         config = _make_multi_pair_config()
         strategy = ArbitrageStrategy(config)
 
-        from models import MarketQuote
+        from core.models import MarketQuote
         mixed_quotes = [
             MarketQuote(dex="A", pair="WETH/USDC", buy_price=3000.0, sell_price=2998.0, fee_bps=0.0),
             MarketQuote(dex="B", pair="WBTC/USDC", buy_price=70000.0, sell_price=69900.0, fee_bps=0.0),
@@ -207,7 +207,7 @@ class StrategyWithMultiPairQuotesTests(unittest.TestCase):
         )
         strategy = ArbitrageStrategy(config)
 
-        from models import MarketQuote
+        from core.models import MarketQuote
         quotes = [
             MarketQuote(dex="A", pair="WBTC/USDC", buy_price=70000.0, sell_price=69900.0, fee_bps=0.0),
             MarketQuote(dex="B", pair="WBTC/USDC", buy_price=70600.0, sell_price=70500.0, fee_bps=0.0),

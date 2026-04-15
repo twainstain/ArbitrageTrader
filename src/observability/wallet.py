@@ -17,8 +17,8 @@ def get_wallet_balances() -> dict:
     Chains that fail to query return None.
     """
     from web3 import Web3
-    from contracts import PUBLIC_RPC_URLS
-    from env import get_rpc_overrides
+    from core.contracts import PUBLIC_RPC_URLS
+    from core.env import get_rpc_overrides
 
     private_key = os.environ.get("EXECUTOR_PRIVATE_KEY", "")
     if not private_key:

@@ -131,7 +131,7 @@ class DiscoverAndPersistTests(unittest.TestCase):
 
         from persistence.db import init_db, close_db
         from persistence.repository import Repository
-        from config import PairConfig
+        from core.config import PairConfig
 
         tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
         conn = init_db(tmp.name)

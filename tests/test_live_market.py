@@ -5,8 +5,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import BotConfig, DexConfig
-from live_market import LiveMarket, LiveMarketError
+from core.config import BotConfig, DexConfig
+from market.live_market import LiveMarket, LiveMarketError
 
 
 def _make_live_config(**overrides: object) -> BotConfig:

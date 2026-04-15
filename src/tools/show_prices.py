@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import requests
 
-from contracts import (
+from core.contracts import (
     BALANCER_POOL_IDS,
     BALANCER_VAULT,
     PUBLIC_RPC_URLS,
@@ -12,14 +12,14 @@ from contracts import (
     UNISWAP_FEE_TIERS,
     UNISWAP_V3_QUOTER_V2,
 )
-from subgraphs import (
+from market.subgraphs import (
     BALANCER_V2_SUBGRAPH,
     SUSHI_V3_POOLS,
     SUSHI_V3_SUBGRAPH,
     UNISWAP_V3_POOLS,
     UNISWAP_V3_SUBGRAPH,
 )
-from tokens import CHAIN_TOKENS, defillama_coin_id
+from core.tokens import CHAIN_TOKENS, defillama_coin_id
 
 DEFILLAMA_URL = "https://coins.llama.fi/prices/current"
 
@@ -118,7 +118,7 @@ def show_prices() -> None:
 
 
 def main() -> None:
-    from env import load_env
+    from core.env import load_env
 
     load_env()
     show_exchange_info()

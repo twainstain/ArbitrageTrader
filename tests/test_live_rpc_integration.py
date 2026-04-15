@@ -27,7 +27,7 @@ D = Decimal
 
 def _make_single_dex_config(dex_name, chain, dex_type, fee_bps, pair="WETH/USDC",
                              base="WETH", quote="USDC", trade_size=1.0):
-    from config import BotConfig, DexConfig
+    from core.config import BotConfig, DexConfig
     # Need at least 2 DEXes for config validation; add a dummy.
     config = BotConfig(
         pair=pair, base_asset=base, quote_asset=quote,
@@ -51,7 +51,7 @@ class UniswapV3LiveTests(unittest.TestCase):
     """Verify Uniswap V3 quoter returns sane prices on Ethereum."""
 
     def test_ethereum_weth_usdc(self):
-        from onchain_market import OnChainMarket
+        from market.onchain_market import OnChainMarket
         config = _make_single_dex_config("Uniswap-Ethereum", "ethereum", "uniswap_v3", 5.0)
         market = OnChainMarket(config)
         price, fee = market._quote_uniswap_v3(
@@ -65,7 +65,7 @@ class UniswapV3LiveTests(unittest.TestCase):
         self.assertGreater(fee, 0)
 
     def test_arbitrum_weth_usdc(self):
-        from onchain_market import OnChainMarket
+        from market.onchain_market import OnChainMarket
         config = _make_single_dex_config("Uniswap-Arbitrum", "arbitrum", "uniswap_v3", 5.0)
         market = OnChainMarket(config)
         price, fee = market._quote_uniswap_v3(
@@ -83,8 +83,8 @@ class VelodromeLiveTests(unittest.TestCase):
     """Verify Velodrome V2 quoter on Optimism returns quotes."""
 
     def test_optimism_op_usdc(self):
-        from onchain_market import OnChainMarket
-        from tokens import resolve_token_address
+        from market.onchain_market import OnChainMarket
+        from core.tokens import resolve_token_address
         config = _make_single_dex_config(
             "Velodrome-Optimism", "optimism", "velodrome_v2", 20.0,
             pair="OP/USDC", base="OP", quote="USDC", trade_size=250.0,
@@ -101,8 +101,8 @@ class VelodromeLiveTests(unittest.TestCase):
         self.assertLess(price, D("100"))
 
     def test_optimism_weth_usdc_with_bridged_fallback(self):
-        from onchain_market import OnChainMarket
-        from tokens import resolve_token_address
+        from market.onchain_market import OnChainMarket
+        from core.tokens import resolve_token_address
         config = _make_single_dex_config(
             "Velodrome-Optimism", "optimism", "velodrome_v2", 20.0,
         )
@@ -123,8 +123,8 @@ class AerodromeLiveTests(unittest.TestCase):
     """Verify Aerodrome quoter on Base returns quotes."""
 
     def test_base_weth_usdc(self):
-        from onchain_market import OnChainMarket
-        from tokens import resolve_token_address
+        from market.onchain_market import OnChainMarket
+        from core.tokens import resolve_token_address
         config = _make_single_dex_config(
             "Aerodrome-Base", "base", "aerodrome", 20.0,
         )
@@ -144,8 +144,8 @@ class CamelotLiveTests(unittest.TestCase):
     """Verify Camelot V3 quoter on Arbitrum returns quotes."""
 
     def test_arbitrum_weth_usdc(self):
-        from onchain_market import OnChainMarket
-        from tokens import resolve_token_address
+        from market.onchain_market import OnChainMarket
+        from core.tokens import resolve_token_address
         config = _make_single_dex_config(
             "Camelot-Arbitrum", "arbitrum", "camelot_v3", 15.0,
         )
@@ -164,8 +164,8 @@ class LiquidityEstimationLiveTests(unittest.TestCase):
     """Verify TVL estimation produces reasonable values on live pools."""
 
     def test_uniswap_ethereum_deep_pool(self):
-        from onchain_market import OnChainMarket
-        from tokens import resolve_token_address
+        from market.onchain_market import OnChainMarket
+        from core.tokens import resolve_token_address
         config = _make_single_dex_config("Uniswap-Ethereum", "ethereum", "uniswap_v3", 5.0)
         market = OnChainMarket(config)
         weth = resolve_token_address("ethereum", "WETH")
@@ -185,7 +185,7 @@ class PoolDiscoveryLiveTests(unittest.TestCase):
     def test_discover_uniswap_v3_pools_ethereum(self):
         from web3 import Web3
         from registry.pool_discovery import discover_uniswap_v3_pools
-        from contracts import PUBLIC_RPC_URLS
+        from core.contracts import PUBLIC_RPC_URLS
         w3 = Web3(Web3.HTTPProvider(PUBLIC_RPC_URLS["ethereum"], request_kwargs={"timeout": 15}))
         pools = discover_uniswap_v3_pools(
             w3, "ethereum",

@@ -9,7 +9,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from alerting.dispatcher import AlertDispatcher
-from models import Opportunity
+from core.models import Opportunity
 from persistence.db import init_db, close_db
 from persistence.repository import Repository
 from pipeline.lifecycle import CandidatePipeline, PipelineResult

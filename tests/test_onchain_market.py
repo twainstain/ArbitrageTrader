@@ -5,8 +5,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import BotConfig, DexConfig
-from onchain_market import OnChainMarket, OnChainMarketError
+from core.config import BotConfig, DexConfig
+from market.onchain_market import OnChainMarket, OnChainMarketError
 
 
 def _make_onchain_config(**overrides: object) -> BotConfig:
@@ -45,7 +45,7 @@ def _mock_quoter_result(amount_out_usdc: float) -> list:
 
 
 class OnChainMarketInitTests(unittest.TestCase):
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_raises_when_dex_has_no_chain(self, _mock_web3: MagicMock) -> None:
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
@@ -61,7 +61,7 @@ class OnChainMarketInitTests(unittest.TestCase):
         with self.assertRaises(OnChainMarketError, msg="requires a 'chain'"):
             OnChainMarket(config)
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_raises_when_dex_has_no_dex_type(self, _mock_web3: MagicMock) -> None:
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
@@ -77,7 +77,7 @@ class OnChainMarketInitTests(unittest.TestCase):
         with self.assertRaises(OnChainMarketError, msg="requires a 'dex_type'"):
             OnChainMarket(config)
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_raises_for_unsupported_dex_type(self, _mock_web3: MagicMock) -> None:
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
@@ -95,7 +95,7 @@ class OnChainMarketInitTests(unittest.TestCase):
         with self.assertRaises(OnChainMarketError, msg="unsupported dex_type"):
             OnChainMarket(config)
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_raises_for_unknown_chain(self, _mock_web3: MagicMock) -> None:
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
@@ -156,7 +156,7 @@ class OnChainMarketQuoteTests(unittest.TestCase):
 
         mock_w3.eth.contract = fake_contract
 
-        with patch("onchain_market.Web3") as MockWeb3:
+        with patch("market.onchain_market.Web3") as MockWeb3:
             MockWeb3.HTTPProvider = MagicMock()
             MockWeb3.return_value = mock_w3
             MockWeb3.to_checksum_address = lambda x: x
@@ -165,10 +165,10 @@ class OnChainMarketQuoteTests(unittest.TestCase):
         # Replace the internal w3 dict so get_quotes uses our mock.
         market._w3 = {"ethereum": mock_w3}
         # Re-patch to_checksum_address for quote calls.
-        with patch("onchain_market.Web3") as MockWeb3:
+        with patch("market.onchain_market.Web3") as MockWeb3:
             MockWeb3.to_checksum_address = lambda x: x
             # Need to assign at module level for the calls inside get_quotes.
-            import onchain_market as ocm
+            import market.onchain_market as ocm
             original_web3 = ocm.Web3
             ocm.Web3 = MockWeb3
             try:
@@ -234,7 +234,7 @@ class OnChainMarketBalancerTests(unittest.TestCase):
 
         mock_w3 = MagicMock()
 
-        with patch("onchain_market.Web3") as MockWeb3:
+        with patch("market.onchain_market.Web3") as MockWeb3:
             MockWeb3.HTTPProvider = MagicMock()
             MockWeb3.return_value = mock_w3
             MockWeb3.to_checksum_address = lambda x: x
@@ -260,7 +260,7 @@ class OnChainMarketBalancerTests(unittest.TestCase):
 
         mock_w3.eth.contract = fake_contract
 
-        import onchain_market as ocm
+        import market.onchain_market as ocm
         original_web3 = ocm.Web3
         ocm.Web3 = MagicMock()
         ocm.Web3.to_checksum_address = lambda x: x
@@ -293,7 +293,7 @@ class OnChainMarketSushiTests(unittest.TestCase):
 
         mock_w3 = MagicMock()
 
-        with patch("onchain_market.Web3") as MockWeb3:
+        with patch("market.onchain_market.Web3") as MockWeb3:
             MockWeb3.HTTPProvider = MagicMock()
             MockWeb3.return_value = mock_w3
             MockWeb3.to_checksum_address = lambda x: x
@@ -312,7 +312,7 @@ class OnChainMarketSushiTests(unittest.TestCase):
         uni_contract.functions.quoteExactInputSingle.side_effect = scaled_quote
         mock_w3.eth.contract = MagicMock(return_value=uni_contract)
 
-        import onchain_market as ocm
+        import market.onchain_market as ocm
         original_web3 = ocm.Web3
         original_sushi = ocm.SUSHI_V3_QUOTER.copy()
         ocm.Web3 = MagicMock()
@@ -330,7 +330,7 @@ class OnChainMarketSushiTests(unittest.TestCase):
 
 
 class OnChainMarketVelodromeTests(unittest.TestCase):
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_velodrome_uses_best_of_stable_and_volatile_routes(self, mock_web3_cls) -> None:
         config = BotConfig(
             pair="OP/USDC",
@@ -390,7 +390,7 @@ class OnChainMarketVelodromeTests(unittest.TestCase):
         self.assertEqual(price, 1500)
         self.assertEqual(fee_bps, 20)
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_velodrome_falls_back_to_bridged_usdc(self, mock_web3_cls) -> None:
         """When native USDC returns 0, Velodrome should retry with USDC.e."""
         config = BotConfig(
@@ -441,7 +441,7 @@ class OnChainMarketVelodromeTests(unittest.TestCase):
         )
         self.assertEqual(price, 2400)
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_velodrome_fee_stable_vs_volatile(self, mock_web3_cls) -> None:
         """Stable pool should return ~2 bps, volatile ~20 bps."""
         config = BotConfig(
@@ -488,7 +488,7 @@ class OnChainMarketVelodromeTests(unittest.TestCase):
         # Stable pool won → fee should be 2 bps.
         self.assertEqual(fee_bps, 2)
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_aerodrome_uses_usdbc_on_base(self, mock_web3_cls) -> None:
         """Aerodrome on Base should fall back to USDbC when native USDC returns 0."""
         config = BotConfig(
@@ -537,7 +537,7 @@ class OnChainMarketVelodromeTests(unittest.TestCase):
 
 
 class LiquidityEstimationTests(unittest.TestCase):
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_estimate_deep_pool(self, mock_web3_cls) -> None:
         """Small and normal prices close together → high TVL estimate."""
         mock_web3_cls.HTTPProvider = MagicMock()
@@ -555,7 +555,7 @@ class LiquidityEstimationTests(unittest.TestCase):
         # 0.045% impact → very high TVL
         self.assertGreater(tvl, D("1000000"))
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_estimate_thin_pool(self, mock_web3_cls) -> None:
         """2.2% price impact → ~$52K TVL → below scanner $1M threshold."""
         mock_web3_cls.HTTPProvider = MagicMock()
@@ -574,7 +574,7 @@ class LiquidityEstimationTests(unittest.TestCase):
         self.assertLess(tvl, D("100000"))
         self.assertGreater(tvl, D("10000"))
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_estimate_returns_zero_on_failure(self, mock_web3_cls) -> None:
         """If _quote_small_amount fails, return ZERO (no filter triggered)."""
         mock_web3_cls.HTTPProvider = MagicMock()
@@ -590,7 +590,7 @@ class LiquidityEstimationTests(unittest.TestCase):
             )
         self.assertEqual(tvl, 0)
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_estimate_zero_impact_returns_deep_sentinel(self, mock_web3_cls) -> None:
         """Zero impact (same price) → deep pool sentinel."""
         mock_web3_cls.HTTPProvider = MagicMock()
@@ -610,7 +610,7 @@ class LiquidityEstimationTests(unittest.TestCase):
 class TvlCacheTests(unittest.TestCase):
     """Tests for the liquidity estimation cache in OnChainMarket."""
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def setUp(self, mock_web3: MagicMock) -> None:
         mock_web3.HTTPProvider.return_value = MagicMock()
         mock_web3.to_checksum_address = lambda x: x
@@ -686,7 +686,7 @@ class TvlCacheTests(unittest.TestCase):
 class FeeTierCacheTests(unittest.TestCase):
     """Tests for the fee tier caching in OnChainMarket._try_fee_tiers."""
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def setUp(self, mock_web3: MagicMock) -> None:
         mock_web3.HTTPProvider.return_value = MagicMock()
         mock_web3.to_checksum_address = lambda x: x
@@ -704,7 +704,7 @@ class FeeTierCacheTests(unittest.TestCase):
         quoter = MagicMock()
         quoter.functions.quoteExactInputSingle.return_value.call = mock_call
 
-        with patch("onchain_market.Web3") as w3:
+        with patch("market.onchain_market.Web3") as w3:
             w3.to_checksum_address = lambda x: x
             amount, fee_tier = self.market._try_fee_tiers(
                 "test:eth", quoter, "0xweth", "0xusdc",
@@ -729,7 +729,7 @@ class FeeTierCacheTests(unittest.TestCase):
         quoter = MagicMock()
         quoter.functions.quoteExactInputSingle.return_value.call = mock_call
 
-        with patch("onchain_market.Web3") as w3:
+        with patch("market.onchain_market.Web3") as w3:
             w3.to_checksum_address = lambda x: x
             amount, fee_tier = self.market._try_fee_tiers(
                 "test:eth", quoter, "0xweth", "0xusdc",
@@ -753,7 +753,7 @@ class FeeTierCacheTests(unittest.TestCase):
         quoter = MagicMock()
         quoter.functions.quoteExactInputSingle.return_value.call = mock_call
 
-        with patch("onchain_market.Web3") as w3:
+        with patch("market.onchain_market.Web3") as w3:
             w3.to_checksum_address = lambda x: x
             self.market._try_fee_tiers(
                 "test:eth", quoter, "0xweth", "0xusdc",
@@ -763,7 +763,7 @@ class FeeTierCacheTests(unittest.TestCase):
 
 
 class OnChainMarketCurveTests(unittest.TestCase):
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_curve_get_dy_returns_price(self, mock_web3_cls) -> None:
         config = BotConfig(
             pair="USDT/USDC", base_asset="USDT", quote_asset="USDC",
@@ -797,7 +797,7 @@ class OnChainMarketCurveTests(unittest.TestCase):
         self.assertAlmostEqual(float(price), 999.5, delta=1.0)
         self.assertEqual(fee_bps, D("4"))
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_curve_raises_for_unknown_pair(self, mock_web3_cls) -> None:
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
@@ -822,7 +822,7 @@ class OnChainMarketCurveTests(unittest.TestCase):
 
 
 class OnChainMarketTraderJoeTests(unittest.TestCase):
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_traderjoe_lb_returns_price(self, mock_web3_cls) -> None:
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
@@ -866,7 +866,7 @@ class OnChainMarketTraderJoeTests(unittest.TestCase):
         self.assertEqual(price, D("2300"))
         self.assertEqual(fee_bps, D("15"))
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_traderjoe_raises_for_unknown_chain(self, mock_web3_cls) -> None:
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
@@ -893,7 +893,7 @@ class OnChainMarketTraderJoeTests(unittest.TestCase):
 class QuoteSmallAmountFeeCacheTests(unittest.TestCase):
     """Tests for _quote_small_amount reusing the _best_fee cache."""
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_uses_cached_fee_tier(self, mock_web3_cls: MagicMock) -> None:
         """When _best_fee has a cached tier, _quote_small_amount uses it
         instead of sweeping all 4 tiers (saves 3 RPC calls)."""
@@ -925,7 +925,7 @@ class QuoteSmallAmountFeeCacheTests(unittest.TestCase):
         self.assertEqual(call_args[3], 500)  # fee tier position in tuple
         self.assertGreater(result, 0)
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_falls_back_to_sweep_without_cache(self, mock_web3_cls: MagicMock) -> None:
         """Without a cached fee tier, _quote_small_amount sweeps all tiers."""
         config = _make_onchain_config()
@@ -957,7 +957,7 @@ class QuoteSmallAmountFeeCacheTests(unittest.TestCase):
         self.assertEqual(mock_quoter.functions.quoteExactInputSingle.call_count, 4)
         self.assertGreater(result, 0)
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_cached_tier_failure_returns_zero(self, mock_web3_cls: MagicMock) -> None:
         """If the cached tier fails, _quote_small_amount returns 0 (graceful)."""
         config = _make_onchain_config()
@@ -986,7 +986,7 @@ class QuoteSmallAmountFeeCacheTests(unittest.TestCase):
 class PersistentThreadPoolTests(unittest.TestCase):
     """Tests for persistent ThreadPoolExecutor in OnChainMarket."""
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_pool_created_on_init(self, mock_web3_cls: MagicMock) -> None:
         """OnChainMarket should create a persistent thread pool at init."""
         config = _make_onchain_config()
@@ -997,7 +997,7 @@ class PersistentThreadPoolTests(unittest.TestCase):
         from concurrent.futures import ThreadPoolExecutor
         self.assertIsInstance(market._pool, ThreadPoolExecutor)
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_pool_reused_across_calls(self, mock_web3_cls: MagicMock) -> None:
         """The thread pool should be the same instance across get_quotes calls."""
         config = _make_onchain_config()
@@ -1019,7 +1019,7 @@ class PersistentThreadPoolTests(unittest.TestCase):
 class TieredTVLCacheTTLTests(unittest.TestCase):
     """Tests for tiered TVL cache TTL (deep pools get longer TTL)."""
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_deep_pool_uses_long_ttl(self, mock_web3_cls: MagicMock) -> None:
         """Pools with >$1M TVL should stay cached for 30 minutes."""
         config = _make_onchain_config()
@@ -1041,7 +1041,7 @@ class TieredTVLCacheTTLTests(unittest.TestCase):
         # Should return cached value (not re-query).
         self.assertEqual(result, Decimal("50000000"))
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_thin_pool_uses_short_ttl(self, mock_web3_cls: MagicMock) -> None:
         """Pools with <$1M TVL should expire at the default 5-minute TTL."""
         config = _make_onchain_config()
@@ -1076,7 +1076,7 @@ class TieredTVLCacheTTLTests(unittest.TestCase):
 class FeeTierCacheTTLTests(unittest.TestCase):
     """Tests for the extended fee tier cache TTL (5 minutes)."""
 
-    @patch("onchain_market.Web3")
+    @patch("market.onchain_market.Web3")
     def test_cached_tier_used_within_5_minutes(self, mock_web3_cls: MagicMock) -> None:
         """Fee tier cache should hold for 5 minutes, not 60s."""
         config = _make_onchain_config()

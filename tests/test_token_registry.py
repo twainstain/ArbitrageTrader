@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from tokens import (
+from core.tokens import (
     resolve_token_address,
     register_token,
     get_unresolved_tokens,
@@ -133,7 +133,7 @@ class SymbolMapTests(unittest.TestCase):
     def test_symbol_map_consistent_with_dataclass(self):
         """Every attr in SYMBOL_TO_ATTR should be a field on TokenAddresses."""
         from dataclasses import fields
-        from tokens import TokenAddresses
+        from core.tokens import TokenAddresses
         field_names = {f.name for f in fields(TokenAddresses)}
         for sym, attr in SYMBOL_TO_ATTR.items():
             self.assertIn(attr, field_names,

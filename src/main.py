@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 import signal
 
-from bot import ArbitrageBot
-from config import BotConfig
-from env import (
+from execution.bot import ArbitrageBot
+from core.config import BotConfig
+from core.env import (
     get_bot_config_path,
     get_bot_dry_run,
     get_bot_iterations,
@@ -16,7 +16,7 @@ from env import (
     get_rpc_overrides,
     load_env,
 )
-from log import get_logger, setup_logging
+from observability.log import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -159,7 +159,7 @@ def main() -> None:
     # --- Live pair discovery (passed directly to bot, not through config) ---
     discovered_pairs = None
     if args.discover:
-        from pair_scanner import discover_pairs_for_bot
+        from tools.pair_scanner import discover_pairs_for_bot
 
         discovered_pairs = discover_pairs_for_bot(
             chain=args.discover_chain,
@@ -174,24 +174,24 @@ def main() -> None:
     # --- Market source ---
     market = None
     if mode == "live":
-        from live_market import LiveMarket
+        from market.live_market import LiveMarket
 
         # Pass discovered pairs to LiveMarket so it can price ANY token.
         market = LiveMarket(config, pairs=discovered_pairs)
         logger.info("[mode] LIVE — fetching prices from DeFi Llama")
     elif mode == "onchain":
-        from onchain_market import OnChainMarket
+        from market.onchain_market import OnChainMarket
 
         rpc = get_rpc_overrides()
         market = OnChainMarket(config, rpc_overrides=rpc or None, pairs=discovered_pairs)
         logger.info("[mode] ON-CHAIN — querying DEX contracts via RPC")
     elif mode == "subgraph":
-        from subgraph_market import SubgraphMarket
+        from market.subgraph_market import SubgraphMarket
 
         market = SubgraphMarket(config)
         logger.info("[mode] SUBGRAPH — querying The Graph for per-DEX pool prices")
     elif mode == "historical":
-        from historical_market import HistoricalMarket
+        from market.historical_market import HistoricalMarket
 
         market = HistoricalMarket(config, data_files=args.historical)
         iterations = min(iterations, market.total_ticks)
@@ -209,7 +209,7 @@ def main() -> None:
             logger.warning("--execute and --dry-run both set — dry-run takes precedence, "
                            "no real transactions will be sent.")
         else:
-            from chain_executor import ChainExecutor
+            from execution.chain_executor import ChainExecutor
 
             executor = ChainExecutor(config)
             logger.info("[executor] ON-CHAIN — real ERC-20 execution via FlashArbExecutor")

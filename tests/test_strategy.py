@@ -4,9 +4,9 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import BotConfig, DexConfig
-from models import MarketQuote
-from strategy import ArbitrageStrategy
+from core.config import BotConfig, DexConfig
+from core.models import MarketQuote
+from strategy.arb_strategy import ArbitrageStrategy
 
 
 def make_config() -> BotConfig:

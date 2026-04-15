@@ -18,8 +18,8 @@ import json
 from decimal import Decimal
 from pathlib import Path
 
-from config import BotConfig
-from models import BPS_DIVISOR, ZERO, MarketQuote
+from core.config import BotConfig
+from core.models import BPS_DIVISOR, ZERO, MarketQuote
 
 D = Decimal
 TWO = D("2")

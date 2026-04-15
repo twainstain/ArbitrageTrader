@@ -37,7 +37,7 @@ import time
 from dataclasses import dataclass
 
 from registry.discovery import DiscoveredPair, discover_best_pairs
-from tokens import register_token
+from core.tokens import register_token
 from persistence.repository import Repository
 
 logger = logging.getLogger(__name__)

@@ -19,7 +19,7 @@ from typing import Optional
 
 from web3 import Web3
 
-from models import Opportunity
+from core.models import Opportunity
 
 D = Decimal
 logger = logging.getLogger(__name__)

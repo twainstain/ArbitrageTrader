@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 import random
 
-from config import BotConfig, DexConfig, PairConfig
-from models import BPS_DIVISOR, ONE, MarketQuote
+from core.config import BotConfig, DexConfig, PairConfig
+from core.models import BPS_DIVISOR, ONE, MarketQuote
 
 D = Decimal
 

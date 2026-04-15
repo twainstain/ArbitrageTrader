@@ -39,13 +39,13 @@ from alerting.smart_alerts import SmartAlerter
 from alerting.telegram import TelegramAlert
 from alerting.discord import DiscordAlert
 from alerting.gmail import GmailAlert
-from bot import ArbitrageBot
-from config import BotConfig, PairConfig
-from env import get_rpc_overrides, load_env
-from log import get_logger, setup_logging
-from models import ZERO, Opportunity
+from execution.bot import ArbitrageBot
+from core.config import BotConfig, PairConfig
+from core.env import get_rpc_overrides, load_env
+from observability.log import get_logger, setup_logging
+from core.models import ZERO, Opportunity
 from observability.metrics import MetricsCollector
-from onchain_market import OnChainMarket
+from market.onchain_market import OnChainMarket
 from persistence.db import init_db
 from persistence.repository import Repository
 from pipeline.lifecycle import CandidatePipeline
@@ -54,8 +54,8 @@ from pipeline.verifier import OnChainVerifier, VerificationResult
 from registry.monitored_pools import sync_monitored_pools
 from risk.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from risk.policy import RiskPolicy
-from scanner import OpportunityScanner
-from strategy import ArbitrageStrategy
+from strategy.scanner import OpportunityScanner
+from strategy.arb_strategy import ArbitrageStrategy
 from api.app import create_app
 
 logger = get_logger(__name__)
@@ -99,7 +99,7 @@ class OpportunityAwareVerifier:
         self._opps_by_tx[tx_hash] = opportunity
 
     def verify(self, tx_hash: str) -> VerificationResult:
-        from tokens import token_decimals
+        from core.tokens import token_decimals
 
         opp = self._opps_by_tx.get(tx_hash)
         quote_asset = opp.pair.split("/", 1)[1] if opp and "/" in opp.pair else self.executor.config.quote_asset
@@ -143,7 +143,7 @@ def build_execution_stack(
         return None, None, None
 
     try:
-        from chain_executor import ChainExecutor
+        from execution.chain_executor import ChainExecutor
 
         executor = ChainExecutor(config)
         verifier = OpportunityAwareVerifier(executor)
@@ -158,7 +158,7 @@ def build_execution_stack(
 
 def compute_live_execution_summary(config: BotConfig) -> dict[str, object]:
     """Summarize what part of the config is truly executable live today."""
-    from chain_executor import SUPPORTED_LIVE_DEX_TYPES
+    from execution.chain_executor import SUPPORTED_LIVE_DEX_TYPES
 
     executable_dexes = [
         dex for dex in config.dexes
@@ -181,7 +181,7 @@ def assess_launch_readiness(
     target_chain: str = "arbitrum",
 ) -> dict[str, object]:
     """Check whether the current config/env is ready for a narrow live rollout."""
-    from chain_executor import AAVE_V3_POOL, SUPPORTED_LIVE_DEX_TYPES, SWAP_ROUTERS
+    from execution.chain_executor import AAVE_V3_POOL, SUPPORTED_LIVE_DEX_TYPES, SWAP_ROUTERS
 
     rpc_overrides = get_rpc_overrides()
     executor_key_configured = bool(os.environ.get("EXECUTOR_PRIVATE_KEY"))
@@ -723,7 +723,7 @@ def main() -> None:
     discovered = pair_refresher.get_pairs()
     if discovered:
         logger.info("Auto-discovered %d pairs — adding to scan list", len(discovered))
-        from config import PairConfig
+        from core.config import PairConfig
         extra = config.extra_pairs or []
         seen = {config.pair} | {p.pair for p in extra}
         for dp in discovered:

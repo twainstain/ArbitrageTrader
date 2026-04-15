@@ -36,9 +36,9 @@ from decimal import Decimal
 
 from web3 import Web3
 
-from config import PairConfig
-from contracts import PUBLIC_RPC_URLS, VELO_FACTORY
-from tokens import bridged_usdc_address, resolve_token_address
+from core.config import PairConfig
+from core.contracts import PUBLIC_RPC_URLS, VELO_FACTORY
+from core.tokens import bridged_usdc_address, resolve_token_address
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +224,7 @@ def discover_and_persist_pools(
             # Ensure pair exists in DB.
             pair_row = repo.get_pair_on_chain(pair_cfg.pair, chain)
             if pair_row is None:
-                from tokens import token_decimals
+                from core.tokens import token_decimals
                 repo.save_pair(
                     pair=pair_cfg.pair,
                     chain=chain,

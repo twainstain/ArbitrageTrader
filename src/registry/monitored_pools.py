@@ -25,7 +25,7 @@ import logging
 from decimal import Decimal
 
 from persistence.repository import Repository
-from tokens import token_decimals
+from core.tokens import token_decimals
 
 logger = logging.getLogger(__name__)
 

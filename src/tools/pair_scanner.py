@@ -33,8 +33,8 @@ from dataclasses import dataclass
 
 import requests
 
-from env import load_env
-from tokens import CHAIN_TOKENS
+from core.env import load_env
+from core.tokens import CHAIN_TOKENS
 
 DEXSCREENER_BASE_URL = "https://api.dexscreener.com"
 
@@ -293,8 +293,8 @@ def discover_pairs_for_bot(
     Returns:
         List of PairConfig ready to pass to ArbitrageBot(pairs=...).
     """
-    from config import PairConfig
-    from log import get_logger
+    from core.config import PairConfig
+    from observability.log import get_logger
 
     _logger = get_logger(__name__)
 
@@ -370,7 +370,7 @@ def discover_pairs_for_bot(
         reverse=True,
     )[:max_pairs]
 
-    from log import log_discovery, log_discovery_detail
+    from observability.log import log_discovery, log_discovery_detail
 
     result: list[PairConfig] = []
     for pair_name, pairs in sorted_pairs:

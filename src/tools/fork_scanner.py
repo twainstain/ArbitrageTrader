@@ -25,8 +25,8 @@ from dataclasses import dataclass
 
 import requests
 
-from env import load_env
-from log import get_logger
+from core.env import load_env
+from observability.log import get_logger
 
 logger = get_logger(__name__)
 

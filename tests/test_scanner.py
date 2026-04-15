@@ -7,10 +7,10 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import BotConfig, DexConfig
-from models import MarketQuote, Opportunity
-from scanner import OpportunityScanner
-from strategy import ArbitrageStrategy
+from core.config import BotConfig, DexConfig
+from core.models import MarketQuote, Opportunity
+from strategy.scanner import OpportunityScanner
+from strategy.arb_strategy import ArbitrageStrategy
 
 
 def _make_config(**overrides) -> BotConfig:

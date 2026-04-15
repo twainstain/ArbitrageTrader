@@ -8,7 +8,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from perf_tracker import PerfReport, analyze_jsonl, analyze_all_logs
+from observability.perf_tracker import PerfReport, analyze_jsonl, analyze_all_logs
 
 
 def _make_jsonl(records: list[dict]) -> str:

@@ -9,9 +9,9 @@ import math
 import time
 from decimal import Decimal
 
-from config import BotConfig, PairConfig
-from log import get_logger
-from models import BPS_DIVISOR, ONE, ZERO, MarketQuote, Opportunity
+from core.config import BotConfig, PairConfig
+from observability.log import get_logger
+from core.models import BPS_DIVISOR, ONE, ZERO, MarketQuote, Opportunity
 
 logger = get_logger(__name__)
 

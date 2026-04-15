@@ -38,8 +38,8 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from config import BotConfig
-from models import ZERO, ExecutionResult, Opportunity
+from core.config import BotConfig
+from core.models import ZERO, ExecutionResult, Opportunity
 
 
 class PaperExecutor:

@@ -9,7 +9,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from pipeline.verifier import OnChainVerifier, PnLReconciler
-from models import Opportunity
+from core.models import Opportunity
 
 D = Decimal
 
@@ -288,7 +288,7 @@ class ScanMarksSnapshotTests(unittest.TestCase):
 
     def test_queued_candidate_carries_scan_marks(self):
         from pipeline.queue import CandidateQueue, QueuedCandidate
-        from models import Opportunity, ZERO
+        from core.models import Opportunity, ZERO
 
         opp = Opportunity(
             pair="WETH/USDC", buy_dex="Uni", sell_dex="Sushi",

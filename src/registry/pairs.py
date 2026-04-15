@@ -124,7 +124,7 @@ class PairRegistry:
     @classmethod
     def default_ethereum(cls) -> "PairRegistry":
         """Create a registry pre-loaded with the recommended Ethereum pairs."""
-        from tokens import CHAIN_TOKENS
+        from core.tokens import CHAIN_TOKENS
 
         reg = cls()
         eth = CHAIN_TOKENS["ethereum"]

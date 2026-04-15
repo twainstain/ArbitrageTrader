@@ -8,7 +8,7 @@ Log files are named by run start time: ``logs/bot_2026-04-12_21-30-00.log``
 
 Usage in any module::
 
-    from log import get_logger, log_scan, log_execution
+    from observability.log import get_logger, log_scan, log_execution
 
     logger = get_logger(__name__)
     logger.info("Starting bot")
@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from models import ExecutionResult, MarketQuote, Opportunity
+from core.models import ExecutionResult, MarketQuote, Opportunity
 
 
 class _DecimalEncoder(json.JSONEncoder):

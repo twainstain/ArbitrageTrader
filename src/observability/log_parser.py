@@ -31,7 +31,7 @@ from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from log import LOG_DIR
+from observability.log import LOG_DIR
 
 
 def _n(val: object) -> float:

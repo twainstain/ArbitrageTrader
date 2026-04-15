@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from models import Opportunity
+from core.models import Opportunity
 from risk.policy import RiskPolicy, RiskVerdict
 
 D = Decimal

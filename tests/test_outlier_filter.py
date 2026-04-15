@@ -8,8 +8,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from bot import ArbitrageBot
-from models import MarketQuote
+from execution.bot import ArbitrageBot
+from core.models import MarketQuote
 
 
 class OutlierFilterTests(unittest.TestCase):
@@ -76,13 +76,13 @@ class OutlierFilterTests(unittest.TestCase):
 
 class MultiChainTokensTests(unittest.TestCase):
     def test_token_registry_has_all_chains(self) -> None:
-        from tokens import CHAIN_TOKENS
+        from core.tokens import CHAIN_TOKENS
         expected = {"ethereum", "arbitrum", "base", "bsc", "polygon", "optimism",
                     "avax", "fantom", "gnosis", "linea", "scroll", "zksync"}
         self.assertTrue(expected.issubset(set(CHAIN_TOKENS.keys())))
 
     def test_all_chains_have_weth_and_usdc(self) -> None:
-        from tokens import CHAIN_TOKENS
+        from core.tokens import CHAIN_TOKENS
         for chain, tokens in CHAIN_TOKENS.items():
             self.assertTrue(tokens.weth, f"{chain} missing weth")
             self.assertTrue(tokens.usdc, f"{chain} missing usdc")
@@ -90,7 +90,7 @@ class MultiChainTokensTests(unittest.TestCase):
 
 class PairConfigWithAddressTests(unittest.TestCase):
     def test_pair_config_carries_addresses(self) -> None:
-        from config import PairConfig
+        from core.config import PairConfig
         pc = PairConfig(
             pair="ARB/WETH",
             base_asset="ARB",
@@ -104,7 +104,7 @@ class PairConfigWithAddressTests(unittest.TestCase):
         self.assertEqual(pc.chain, "arbitrum")
 
     def test_pair_config_defaults_none(self) -> None:
-        from config import PairConfig
+        from core.config import PairConfig
         pc = PairConfig(pair="WETH/USDC", base_asset="WETH", quote_asset="USDC", trade_size=1.0)
         self.assertIsNone(pc.base_address)
         self.assertIsNone(pc.chain)

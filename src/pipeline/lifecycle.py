@@ -44,7 +44,7 @@ from decimal import Decimal
 from typing import Protocol
 
 from alerting.dispatcher import AlertDispatcher
-from models import ZERO, MarketQuote, Opportunity
+from core.models import ZERO, MarketQuote, Opportunity
 from persistence.repository import Repository
 from pipeline.verifier import VerificationResult
 from risk.policy import RiskPolicy, RiskVerdict

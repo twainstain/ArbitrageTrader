@@ -42,11 +42,11 @@ try:
 except ImportError:
     from web3.middleware import geth_poa_middleware
 
-from config import BotConfig
-from contracts import PUBLIC_RPC_URLS
-from env import get_rpc_overrides
-from log import get_logger, log_execution
-from models import ZERO, ExecutionResult, Opportunity
+from core.config import BotConfig
+from core.contracts import PUBLIC_RPC_URLS
+from core.env import get_rpc_overrides
+from observability.log import get_logger, log_execution
+from core.models import ZERO, ExecutionResult, Opportunity
 
 D = Decimal
 
@@ -316,7 +316,7 @@ class ChainExecutor:
         supported, reason = self._supports_live_execution(opportunity)
         if not supported:
             raise ChainExecutorError(reason)
-        from tokens import resolve_token_address, token_decimals
+        from core.tokens import resolve_token_address, token_decimals
 
         pair_parts = opportunity.pair.split("/", 1)
         if len(pair_parts) != 2:

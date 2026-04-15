@@ -181,7 +181,7 @@ def create_app(
 
     @app.get("/execution")
     def get_execution_status():
-        from chain_executor import SWAP_ROUTERS, AAVE_V3_POOL
+        from execution.chain_executor import SWAP_ROUTERS, AAVE_V3_POOL
         known_chains = ["arbitrum", "optimism", "ethereum", "base"]
         chain_status = {}
         for ch in known_chains:
@@ -591,8 +591,8 @@ def create_app(
         """Fetch wallet balance from on-chain RPC (non-blocking cache)."""
         import os
         from web3 import Web3
-        from contracts import PUBLIC_RPC_URLS
-        from env import get_rpc_overrides
+        from core.contracts import PUBLIC_RPC_URLS
+        from core.env import get_rpc_overrides
 
         private_key = os.environ.get("EXECUTOR_PRIVATE_KEY", "")
         if not private_key:
@@ -638,7 +638,7 @@ def create_app(
         sim = repo.get_simulation(opp_id)
 
         # Re-evaluate risk with CURRENT policy.
-        from models import Opportunity, ZERO
+        from core.models import Opportunity, ZERO
         from decimal import Decimal as D
         replay_opp = Opportunity(
             pair=opp["pair"],

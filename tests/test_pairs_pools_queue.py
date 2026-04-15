@@ -11,7 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from persistence.db import init_db, close_db
 from persistence.repository import Repository
 from pipeline.queue import CandidateQueue
-from models import Opportunity
+from core.models import Opportunity
 from registry.monitored_pools import sync_monitored_pools
 
 D = Decimal

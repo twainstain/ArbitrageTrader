@@ -5,8 +5,8 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from config import BotConfig, DexConfig
-from subgraph_market import SubgraphMarket, SubgraphMarketError
+from core.config import BotConfig, DexConfig
+from market.subgraph_market import SubgraphMarket, SubgraphMarketError
 
 
 def _make_config() -> BotConfig:

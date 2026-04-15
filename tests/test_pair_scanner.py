@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from pair_scanner import (
+from tools.pair_scanner import (
     PairInfo,
     _normalize_symbol,
     find_cross_dex_pairs,

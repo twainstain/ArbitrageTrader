@@ -54,12 +54,12 @@ import time
 
 import uvicorn
 
-from config import BotConfig
-from env import load_env
-from log import setup_logging, get_logger
-from live_market import LiveMarket
-from strategy import ArbitrageStrategy
-from scanner import OpportunityScanner
+from core.config import BotConfig
+from core.env import load_env
+from observability.log import setup_logging, get_logger
+from market.live_market import LiveMarket
+from strategy.arb_strategy import ArbitrageStrategy
+from strategy.scanner import OpportunityScanner
 from persistence.db import init_db
 from persistence.repository import Repository
 from pipeline.lifecycle import CandidatePipeline
@@ -82,7 +82,7 @@ def run_dashboard(app, port: int = 8000) -> None:
 
 
 def _build_pair_list(config: BotConfig, discovered_pairs=None):
-    from config import PairConfig
+    from core.config import PairConfig
 
     if discovered_pairs:
         return list(discovered_pairs)
@@ -126,7 +126,7 @@ def main() -> None:
     discovered_pairs = None
     if args.discover:
         from registry.discovery import discover_best_pairs, print_discovery_report
-        from config import PairConfig
+        from core.config import PairConfig
         logger.info("Running pair discovery (sort by volume, multi-exchange, ERC-20)...")
         discovered = discover_best_pairs(
             chains=["ethereum", "arbitrum", "base", "polygon", "optimism", "avalanche"],
@@ -219,8 +219,8 @@ def main() -> None:
     all_pairs = _build_pair_list(config, discovered_pairs)
 
     if args.onchain:
-        from onchain_market import OnChainMarket
-        from env import get_rpc_overrides
+        from market.onchain_market import OnChainMarket
+        from core.env import get_rpc_overrides
         from observability.quote_diagnostics import QuoteDiagnostics
         rpc = get_rpc_overrides()
         diagnostics = QuoteDiagnostics()
@@ -270,7 +270,7 @@ def main() -> None:
         latency_tracker.mark("rpc_fetch")
 
         # Filter outlier quotes (e.g., Sushi returning $115 when others show $2200).
-        from bot import ArbitrageBot
+        from execution.bot import ArbitrageBot
         quotes = ArbitrageBot._filter_outliers(quotes)
 
         # Run scanner — get ALL opportunities, not just the best.
@@ -305,7 +305,7 @@ def main() -> None:
         # Process same-chain opportunities per chain using the full cost model
         # (DEX fees, flash loan fee, slippage, gas) from strategy.evaluate_pair().
         processed_chains = set()
-        from strategy import ArbitrageStrategy
+        from strategy.arb_strategy import ArbitrageStrategy
         chain_strategy = ArbitrageStrategy(config, pairs=all_pairs)
 
         for chain_name, chain_quotes in chain_map.items():

@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from fork_scanner import find_forks, find_all_dex_forks, ForkInfo
+from tools.fork_scanner import find_forks, find_all_dex_forks, ForkInfo
 
 
 def _mock_protocols() -> list[dict]:
@@ -30,7 +30,7 @@ def _mock_protocols() -> list[dict]:
 
 
 def _patch_fetch(func, *args, **kwargs):
-    import fork_scanner as fs
+    import tools.fork_scanner as fs
     original = fs.fetch_all_protocols
     fs.fetch_all_protocols = lambda **kw: _mock_protocols()
     try:

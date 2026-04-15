@@ -7,9 +7,9 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from models import Opportunity, MarketQuote, ZERO
-from config import BotConfig, DexConfig
-from scanner import OpportunityScanner
+from core.models import Opportunity, MarketQuote, ZERO
+from core.config import BotConfig, DexConfig
+from strategy.scanner import OpportunityScanner
 
 D = Decimal
 

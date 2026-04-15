@@ -5,7 +5,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from chain_executor import (
+from execution.chain_executor import (
     ChainExecutor,
     ChainExecutorError,
     FLASHBOTS_CHAINS,
@@ -20,8 +20,8 @@ from chain_executor import (
     V3_DEX_TYPES,
     VELO_DEX_TYPES,
 )
-from config import BotConfig, DexConfig
-from models import Opportunity
+from core.config import BotConfig, DexConfig
+from core.models import Opportunity
 
 
 def _make_config() -> BotConfig:
@@ -90,7 +90,7 @@ class ExecutorABITests(unittest.TestCase):
 
 
 class ResolveRouterTests(unittest.TestCase):
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_resolve_router_finds_matching_dex(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -109,7 +109,7 @@ class ResolveRouterTests(unittest.TestCase):
             router = executor._resolve_router("Uniswap")
             self.assertTrue(router.startswith("0x"))
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_resolve_router_unknown_dex_raises(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -130,7 +130,7 @@ class ResolveRouterTests(unittest.TestCase):
 
 
 class DynamicPairResolutionTests(unittest.TestCase):
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_build_transaction_resolves_weth_usdc(self, mock_web3_cls) -> None:
         """_build_transaction should resolve WETH/USDC dynamically from config."""
         mock_w3 = MagicMock()
@@ -158,7 +158,7 @@ class DynamicPairResolutionTests(unittest.TestCase):
             # Verify the contract was called (no crash from hardcoded resolution).
             mock_contract.functions.executeArbitrage.assert_called_once()
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_build_transaction_fails_for_unknown_asset(self, mock_web3_cls) -> None:
         """Should raise ChainExecutorError for an unresolvable asset."""
         mock_w3 = MagicMock()
@@ -195,7 +195,7 @@ class DynamicPairResolutionTests(unittest.TestCase):
             with self.assertRaises(ChainExecutorError):
                 executor._build_transaction(bad_opp)
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_build_transaction_uses_opportunity_pair_assets(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -249,7 +249,7 @@ class DynamicPairResolutionTests(unittest.TestCase):
             "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
             "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
         }):
-            with patch("chain_executor.Web3") as mock_web3_cls:
+            with patch("execution.chain_executor.Web3") as mock_web3_cls:
                 mock_w3 = MagicMock()
                 mock_web3_cls.return_value = mock_w3
                 mock_web3_cls.HTTPProvider = MagicMock()
@@ -317,7 +317,7 @@ class VelodromeExecutionTests(unittest.TestCase):
         for field in ["swapTypeA", "swapTypeB", "factoryA", "factoryB", "stableA", "stableB"]:
             self.assertIn(field, param_names, f"Missing ABI field: {field}")
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_resolve_router_finds_velodrome(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -347,7 +347,7 @@ class VelodromeExecutionTests(unittest.TestCase):
             router = executor._resolve_router("Velodrome-Optimism")
             self.assertEqual(router, SWAP_ROUTERS["optimism"]["velodrome_v2"])
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_resolve_velo_factory(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -377,7 +377,7 @@ class VelodromeExecutionTests(unittest.TestCase):
             factory = executor._resolve_velo_factory("Velodrome-Optimism")
             self.assertEqual(factory, VELO_FACTORIES["optimism"]["velodrome_v2"])
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_supports_live_execution_accepts_velo_v3_mix(self, mock_web3_cls) -> None:
         """A Velodrome buy + V3 sell should be supported."""
         mock_w3 = MagicMock()
@@ -416,7 +416,7 @@ class VelodromeExecutionTests(unittest.TestCase):
         self.assertTrue(supported)
         self.assertEqual(reason, "ok")
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_build_transaction_with_velodrome(self, mock_web3_cls) -> None:
         """_build_transaction should pass correct swap types for Velo+V3 mix."""
         mock_w3 = MagicMock()
@@ -472,7 +472,7 @@ class VelodromeExecutionTests(unittest.TestCase):
         self.assertFalse(params[12])
         self.assertFalse(params[13])
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_curve_still_unsupported(self, mock_web3_cls) -> None:
         """Curve should still be rejected."""
         mock_w3 = MagicMock()
@@ -512,7 +512,7 @@ class VelodromeExecutionTests(unittest.TestCase):
 
 
 class GasEstimationTests(unittest.TestCase):
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_estimate_gas_fees_uses_fee_history(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -542,7 +542,7 @@ class GasEstimationTests(unittest.TestCase):
             # priority fee should be reasonable (not zero).
             self.assertGreater(priority_fee, 0)
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_estimate_gas_fees_fallback_on_error(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -580,7 +580,7 @@ class FlashbotsTests(unittest.TestCase):
     def test_flashbots_relay_url_is_set(self) -> None:
         self.assertTrue(FLASHBOTS_RELAY_URL.startswith("https://"))
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_executor_enables_flashbots_on_ethereum(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -595,7 +595,7 @@ class FlashbotsTests(unittest.TestCase):
             executor = ChainExecutor(_make_config())
             self.assertTrue(executor.use_flashbots)
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_executor_disables_flashbots_on_arbitrum(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -664,7 +664,7 @@ class ExecuteFlowTests(unittest.TestCase):
             executor = ChainExecutor(_make_config())
         return executor, mock_w3
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_execute_success(self, mock_web3_cls) -> None:
         executor, mock_w3 = self._make_executor(mock_web3_cls)
         mock_w3.eth.call.return_value = b""
@@ -677,7 +677,7 @@ class ExecuteFlowTests(unittest.TestCase):
         self.assertTrue(result.success)
         self.assertIn("tx:", result.reason)
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_execute_simulation_failure_skips(self, mock_web3_cls) -> None:
         executor, mock_w3 = self._make_executor(mock_web3_cls)
         mock_w3.eth.call.side_effect = Exception("execution reverted: profit below minimum")
@@ -688,7 +688,7 @@ class ExecuteFlowTests(unittest.TestCase):
         self.assertIn("profit_below_minimum", result.reason)
         mock_w3.eth.send_raw_transaction.assert_not_called()
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_execute_tx_reverted(self, mock_web3_cls) -> None:
         executor, mock_w3 = self._make_executor(mock_web3_cls)
         mock_w3.eth.call.return_value = b""
@@ -701,7 +701,7 @@ class ExecuteFlowTests(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("tx_reverted", result.reason)
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_execute_exception_returns_error(self, mock_web3_cls) -> None:
         executor, mock_w3 = self._make_executor(mock_web3_cls)
         # Simulation passes but send_raw_transaction raises.
@@ -715,7 +715,7 @@ class ExecuteFlowTests(unittest.TestCase):
 
 
 class SimulateTransactionTests(unittest.TestCase):
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_simulate_success(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -736,7 +736,7 @@ class SimulateTransactionTests(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(reason, "ok")
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_simulate_revert_extracts_reason(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -759,7 +759,7 @@ class SimulateTransactionTests(unittest.TestCase):
 
 
 class ResolveFeeTests(unittest.TestCase):
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_resolve_fee_converts_bps_to_tier(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
@@ -777,7 +777,7 @@ class ResolveFeeTests(unittest.TestCase):
         self.assertEqual(executor._resolve_fee("Uniswap"), 3000)
         self.assertEqual(executor._resolve_fee("PancakeSwap"), 2500)
 
-    @patch("chain_executor.Web3")
+    @patch("execution.chain_executor.Web3")
     def test_resolve_fee_default_for_unknown(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3

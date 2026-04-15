@@ -9,16 +9,16 @@ from decimal import Decimal
 from typing import Protocol
 
 from alerting.dispatcher import AlertDispatcher
-from config import BotConfig, PairConfig
-from executor import PaperExecutor
-from log import (
+from core.config import BotConfig, PairConfig
+from execution.executor import PaperExecutor
+from observability.log import (
     get_logger,
     log_execution,
     log_scan,
     log_summary,
 )
-from market import SimulatedMarket
-from models import ZERO, ExecutionResult, MarketQuote, Opportunity
+from market.sim_market import SimulatedMarket
+from core.models import ZERO, ExecutionResult, MarketQuote, Opportunity
 from strategy import ArbitrageStrategy
 
 # Use fixed name "bot" (not __name__) so log capture works regardless of

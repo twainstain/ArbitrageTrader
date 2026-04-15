@@ -28,7 +28,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 
-from models import Opportunity
+from core.models import Opportunity
 
 logger = logging.getLogger(__name__)
 
