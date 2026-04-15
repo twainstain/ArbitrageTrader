@@ -118,6 +118,9 @@ class BotConfig:
     # Optional additional pairs to scan each cycle.
     # The video recommends scanning multiple high-volume ERC-20 pairs.
     extra_pairs: list[PairConfig] | None = None
+    # Per-chain execution mode: {"arbitrum": "live", "optimism": "simulated"}.
+    # Chains not listed fall back to the global execution_enabled flag.
+    chain_execution_mode: dict | None = None
 
     def __post_init__(self) -> None:
         for attr in ("trade_size", "min_profit_base", "estimated_gas_cost_base",
@@ -175,6 +178,7 @@ class BotConfig:
             poll_interval_seconds=float(data["poll_interval_seconds"]),
             dexes=dexes,
             extra_pairs=extra_pairs,
+            chain_execution_mode=data.get("chain_execution_mode"),
         )
         config.validate()
         return config

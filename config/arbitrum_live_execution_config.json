@@ -9,6 +9,9 @@
   "flash_loan_provider": "aave_v3",
   "slippage_bps": 15.0,
   "poll_interval_seconds": 8.0,
+  "chain_execution_mode": {
+    "arbitrum": "live"
+  },
   "extra_pairs": [
     {"pair": "WETH/USDT", "base_asset": "WETH", "quote_asset": "USDT", "trade_size": 1.0, "chain": "arbitrum"}
   ],

@@ -596,10 +596,15 @@ def main() -> None:
     queue = CandidateQueue(max_size=args.queue_size)
 
     # --- Risk ---
+    chain_modes = config.chain_execution_mode or {}
+    any_live = any(m == "live" for m in chain_modes.values())
     risk_policy = RiskPolicy(
-        execution_enabled=False,  # dry-run by default
+        execution_enabled=False,  # global default; per-chain modes override
         min_net_profit=0.0005,    # low for testing (~$1). Production: 0.005 (~$10)
+        chain_execution_mode=dict(chain_modes),
     )
+    if chain_modes:
+        logger.info("Chain execution modes from config: %s", chain_modes)
     breaker = CircuitBreaker(CircuitBreakerConfig(
         max_reverts=3, revert_window_seconds=300,
         max_rpc_errors=10, rpc_error_window_seconds=60,
