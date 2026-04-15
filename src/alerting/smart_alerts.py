@@ -29,14 +29,14 @@ DAILY_INTERVAL = 86400.0
 
 # ── HTML color helpers ────────────────────────────────────────────────
 
-_GREEN = "#22c55e"
-_RED = "#ef4444"
-_YELLOW = "#eab308"
-_GRAY = "#9ca3af"
+_GREEN = "#00a87e"      # Revolut teal — success/profit
+_RED = "#e23b4a"        # Revolut danger — loss/revert
+_YELLOW = "#ec7e00"     # Revolut warning — pending
+_GRAY = "#8d969e"       # Revolut cool gray — muted
 _WHITE = "#ffffff"
-_DARK_BG = "#1e1e2e"
-_CARD_BG = "#2a2a3e"
-_BORDER = "#3a3a5e"
+_DARK_BG = "#191c1f"    # Revolut dark
+_CARD_BG = "#242729"    # Card surface
+_BORDER = "#2e3236"     # Subtle border
 
 
 def _clr(val: float | int | str | None, positive_good: bool = True) -> str:
@@ -83,16 +83,16 @@ def _html_wrapper(title: str, body: str, dashboard_url: str) -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
 </head>
-<body style="margin:0;padding:0;background:{_DARK_BG};font-family:-apple-system,BlinkMacSystemFont,'SF Mono',monospace,monospace;-webkit-text-size-adjust:100%">
-<div style="max-width:600px;margin:12px auto;background:{_CARD_BG};border-radius:8px;border:1px solid {_BORDER};overflow:hidden">
-  <div style="background:{_BORDER};padding:14px 16px">
-    <h2 style="margin:0;color:{_WHITE};font-size:15px">{title}</h2>
+<body style="margin:0;padding:0;background:{_DARK_BG};font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;-webkit-text-size-adjust:100%;letter-spacing:0.16px">
+<div style="max-width:600px;margin:12px auto;background:{_CARD_BG};border-radius:20px;overflow:hidden">
+  <div style="background:{_BORDER};padding:16px 20px">
+    <h2 style="margin:0;color:{_WHITE};font-size:16px;font-weight:600;letter-spacing:-0.16px">{title}</h2>
   </div>
   <table style="width:100%;border-collapse:collapse;font-size:13px" cellpadding="0" cellspacing="0">
     {body}
   </table>
-  <div style="padding:14px 16px;text-align:center;border-top:1px solid {_BORDER}">
-    <a href="{dashboard_url}" style="color:#60a5fa;text-decoration:none;font-size:14px;font-weight:bold;display:inline-block;padding:8px 24px;background:#1f6feb;border-radius:6px;color:#ffffff">Open Dashboard</a>
+  <div style="padding:16px 20px;text-align:center;border-top:1px solid {_BORDER}">
+    <a href="{dashboard_url}" style="text-decoration:none;font-size:14px;font-weight:600;display:inline-block;padding:10px 32px;background:#494fdf;border-radius:9999px;color:#ffffff">Open Dashboard</a>
   </div>
 </div>
 </body>

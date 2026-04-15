@@ -15,70 +15,85 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
     <title>Arbitrage Trader Dashboard</title>
     <meta http-equiv="refresh" content="30">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
-               background: #0d1117; color: #c9d1d9; padding: 20px; }
-        h1 { color: #58a6ff; margin-bottom: 20px; }
-        h2 { color: #8b949e; margin: 20px 0 10px; font-size: 14px; text-transform: uppercase; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+               background: #191c1f; color: #f4f4f4; padding: 24px; letter-spacing: 0.16px; }
+        h1 { color: #ffffff; margin-bottom: 24px; font-weight: 600; font-size: 28px; letter-spacing: -0.4px; }
+        h2 { color: #8d969e; margin: 24px 0 12px; font-size: 13px; text-transform: uppercase;
+             font-weight: 600; letter-spacing: 0.24px; }
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
-        .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
-        .card-title { font-size: 12px; color: #8b949e; text-transform: uppercase; margin-bottom: 8px; }
-        .card-value { font-size: 28px; font-weight: bold; color: #f0f6fc; }
-        .card-sub { font-size: 12px; color: #8b949e; margin-top: 4px; }
-        .status-ok { color: #3fb950; }
-        .status-warn { color: #d29922; }
-        .status-bad { color: #f85149; }
+        .card { background: #242729; border-radius: 20px; padding: 20px; }
+        .card-title { font-size: 12px; color: #8d969e; text-transform: uppercase; margin-bottom: 8px;
+                      font-weight: 600; letter-spacing: 0.24px; }
+        .card-value { font-size: 28px; font-weight: 600; color: #ffffff; letter-spacing: -0.32px; }
+        .card-sub { font-size: 12px; color: #8d969e; margin-top: 6px; }
+        .status-ok { color: #00a87e; }
+        .status-warn { color: #ec7e00; }
+        .status-bad { color: #e23b4a; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th { text-align: left; padding: 8px; border-bottom: 2px solid #30363d; color: #8b949e;
-             font-size: 12px; text-transform: uppercase; cursor: pointer; }
-        th:hover { color: #58a6ff; }
-        td { padding: 8px; border-bottom: 1px solid #21262d; font-size: 13px; }
-        tr:hover { background: #1c2128; }
-        .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
-        .tag-detected { background: #1f6feb33; color: #58a6ff; }
-        .tag-approved { background: #23863533; color: #3fb950; }
-        .tag-rejected { background: #da362933; color: #f85149; }
-        .tag-submitted { background: #9e6a0333; color: #d29922; }
+        th { text-align: left; padding: 10px 8px; border-bottom: 2px solid #2e3236; color: #8d969e;
+             font-size: 11px; text-transform: uppercase; cursor: pointer; font-weight: 600;
+             letter-spacing: 0.24px; }
+        th:hover { color: #494fdf; }
+        td { padding: 10px 8px; border-bottom: 1px solid #2a2d31; font-size: 13px; }
+        tr:hover { background: #2a2d31; }
+        .tag { display: inline-block; padding: 3px 10px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+        .tag-detected { background: rgba(73,79,223,0.15); color: #494fdf; }
+        .tag-approved { background: rgba(0,168,126,0.15); color: #00a87e; }
+        .tag-rejected { background: rgba(226,59,74,0.15); color: #e23b4a; }
+        .tag-submitted { background: rgba(236,126,0,0.15); color: #ec7e00; }
         .tabs { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-        .tab { padding: 6px 16px; border-radius: 6px; background: #21262d; color: #8b949e;
-               cursor: pointer; font-size: 13px; border: 1px solid #30363d; text-decoration: none; }
-        .tab.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
-        .filter-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; }
-        .filter-row label { color: #8b949e; font-size: 13px; }
-        .btn { padding: 6px 16px; border-radius: 6px; font-size: 13px; cursor: pointer;
-               border: 1px solid #30363d; font-weight: bold; }
-        .btn-green { background: #238636; color: #fff; border-color: #238636; }
-        .btn-green:hover { background: #2ea043; }
-        .btn-red { background: #da3633; color: #fff; border-color: #da3633; }
-        .btn-red:hover { background: #f85149; }
-        .btn-gray { background: #21262d; color: #8b949e; border-color: #30363d; }
-        .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 16px; }
-        select { background: #161b22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px;
-                 padding: 6px 12px; font-size: 13px; }
+        .tab { padding: 8px 20px; border-radius: 9999px; background: #242729; color: #8d969e;
+               cursor: pointer; font-size: 13px; border: none; text-decoration: none; font-weight: 500; }
+        .tab:hover { background: #2e3236; color: #f4f4f4; }
+        .tab.active { background: #494fdf; color: #fff; }
+        .filter-row { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; flex-wrap: wrap; }
+        .filter-row label { color: #8d969e; font-size: 13px; font-weight: 500; }
+        .btn { padding: 10px 24px; border-radius: 9999px; font-size: 13px; cursor: pointer;
+               border: none; font-weight: 600; letter-spacing: 0.16px; }
+        .btn-green { background: #00a87e; color: #fff; }
+        .btn-green:hover { opacity: 0.85; }
+        .btn-red { background: #e23b4a; color: #fff; }
+        .btn-red:hover { opacity: 0.85; }
+        .btn-gray { background: #2e3236; color: #8d969e; }
+        .btn-gray:hover { opacity: 0.85; }
+        .controls { display: flex; gap: 8px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+        select { background: #242729; color: #f4f4f4; border: 2px solid #2e3236; border-radius: 9999px;
+                 padding: 8px 16px; font-size: 13px; font-family: 'Inter', sans-serif; }
+        input[type="datetime-local"] { background: #242729; color: #f4f4f4; border: 2px solid #2e3236;
+                 border-radius: 9999px; padding: 6px 14px; font-size: 12px; font-family: 'Inter', sans-serif; }
         .bar-chart { display: flex; align-items: flex-end; gap: 4px; height: 120px;
-                     background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-                     padding: 12px; margin-top: 8px; }
+                     background: #242729; border-radius: 20px;
+                     padding: 16px; margin-top: 8px; }
         .bar-group { display: flex; flex-direction: column; align-items: center; flex: 1; }
         .bar-stack { display: flex; flex-direction: column-reverse; width: 100%; max-width: 40px; }
-        .bar-win { background: #3fb950; min-height: 2px; border-radius: 2px 2px 0 0; }
-        .bar-loss { background: #f85149; min-height: 0; border-radius: 0 0 2px 2px; }
-        .bar-label { font-size: 10px; color: #8b949e; margin-top: 4px; text-align: center; }
+        .bar-win { background: #00a87e; min-height: 2px; border-radius: 2px 2px 0 0; }
+        .bar-loss { background: #e23b4a; min-height: 0; border-radius: 0 0 2px 2px; }
+        .bar-label { font-size: 10px; color: #8d969e; margin-top: 4px; text-align: center; }
         .chart-legend { display: flex; gap: 16px; margin-top: 8px; font-size: 12px; }
         .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
-        .sort-arrow { font-size: 10px; color: #484f58; }
-        .sort-arrow.active { color: #58a6ff; }
-        th.sorted { color: #58a6ff; }
-        tr.exec-row { background: #1c2128; cursor: pointer; }
-        tr.exec-row:hover { background: #242a33; }
-        tr.exec-row td:first-child { border-left: 3px solid #d29922; padding-left: 5px; }
+        .sort-arrow { font-size: 10px; color: #505a63; }
+        .sort-arrow.active { color: #494fdf; }
+        th.sorted { color: #494fdf; }
+        tr.exec-row { background: #2a2d31; cursor: pointer; }
+        tr.exec-row:hover { background: #2e3236; }
+        tr.exec-row td:first-child { border-left: 3px solid #ec7e00; padding-left: 5px; }
         tr.exec-detail { display: none; }
         tr.exec-detail.open { display: table-row; }
-        tr.exec-detail td { background: #161b22; padding: 12px 16px; border-left: 3px solid #30363d; }
+        tr.exec-detail td { background: #242729; padding: 12px 16px; border-left: 3px solid #2e3236; }
         .exec-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
         .exec-item { font-size: 12px; }
-        .exec-label { color: #8b949e; text-transform: uppercase; font-size: 10px; }
-        .exec-value { color: #f0f6fc; font-family: monospace; }
+        .exec-label { color: #8d969e; text-transform: uppercase; font-size: 10px; font-weight: 600; letter-spacing: 0.24px; }
+        .exec-value { color: #ffffff; font-family: 'Inter', monospace; }
+        @media (max-width: 720px) {
+            body { padding: 12px; }
+            .grid { grid-template-columns: 1fr; }
+            .card-value { font-size: 22px; }
+            h1 { font-size: 22px; }
+        }
     </style>
 </head>
 <body>
@@ -86,12 +101,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     <!-- Scanner Controls -->
     <div class="controls" id="scanner-controls">
-        <span style="color:#8b949e;font-size:13px">Scanner:</span>
+        <span style="color:#8d969e;font-size:13px">Scanner:</span>
         <span id="scanner-status" class="tag tag-detected">loading...</span>
         <button class="btn btn-green" onclick="controlScanner('start')">Start</button>
         <button class="btn btn-red" onclick="controlScanner('stop')">Stop</button>
-        <span style="color:#30363d">|</span>
-        <span style="color:#8b949e;font-size:13px">Execution:</span>
+        <span style="color:#2e3236">|</span>
+        <span style="color:#8d969e;font-size:13px">Execution:</span>
         <button class="btn btn-gray" id="exec-toggle" onclick="toggleExecution()">loading...</button>
     </div>
 
@@ -118,17 +133,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
 
     <!-- Chain Filter + Time Window Tabs + Custom Range -->
-    <h2>Performance <span style="font-size:11px;color:#8b949e;font-weight:normal;text-transform:none">(times in EST)</span></h2>
+    <h2>Performance <span style="font-size:11px;color:#8d969e;font-weight:normal;text-transform:none">(times in EST)</span></h2>
     <div class="filter-row">
         <label>Chain:</label>
         <select id="chain-filter" onchange="onChainFilter()">
             <option value="">All Chains</option>
         </select>
-        <span style="color:#30363d">|</span>
+        <span style="color:#2e3236">|</span>
         <label>From:</label>
-        <input type="datetime-local" id="range-start" style="background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 8px;font-size:12px">
+        <input type="datetime-local" id="range-start" style="background:#242729;color:#f4f4f4;border:2px solid #2e3236;border-radius:9999px;padding:6px 14px;font-size:12px;font-family:Inter,sans-serif">
         <label>To:</label>
-        <input type="datetime-local" id="range-end" style="background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 8px;font-size:12px">
+        <input type="datetime-local" id="range-end" style="background:#242729;color:#f4f4f4;border:2px solid #2e3236;border-radius:9999px;padding:6px 14px;font-size:12px;font-family:Inter,sans-serif">
         <button class="btn btn-green" style="padding:4px 12px;font-size:12px" onclick="applyRange()">Apply</button>
         <button class="btn btn-gray" style="padding:4px 12px;font-size:12px" onclick="clearRange()">Clear</button>
     </div>
@@ -138,8 +153,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <!-- Hourly Bar Chart -->
     <h2>Hourly Win/Loss (24h)</h2>
     <div class="chart-legend">
-        <span><span class="legend-dot" style="background:#3fb950"></span>Approved/Included</span>
-        <span><span class="legend-dot" style="background:#f85149"></span>Rejected/Reverted</span>
+        <span><span class="legend-dot" style="background:#00a87e"></span>Approved/Included</span>
+        <span><span class="legend-dot" style="background:#e23b4a"></span>Rejected/Reverted</span>
     </div>
     <div id="bar-chart-container"></div>
 
@@ -444,8 +459,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             rows += '<tr>';
             rows += '<td><b>' + c.chain + '</b></td>';
             rows += '<td>' + total + '</td>';
-            rows += '<td style="color:#3fb950">' + approved + '</td>';
-            rows += '<td style="color:#f85149">' + rejected + '</td>';
+            rows += '<td style="color:#00a87e">' + approved + '</td>';
+            rows += '<td style="color:#e23b4a">' + rejected + '</td>';
             rows += '</tr>';
         }
         tbody.innerHTML = rows;
@@ -556,29 +571,29 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         for (const o of data.slice(0, 50)) {
             const profitWeth = o.expected_net_profit ? Number(o.expected_net_profit) : 0;
             const profitUsd = (profitWeth * 2300).toFixed(2);
-            const profitColor = profitWeth > 0 ? '#3fb950' : '#f85149';
+            const profitColor = profitWeth > 0 ? '#00a87e' : '#e23b4a';
             const showExpected = isApproved(o.status);
             const hasExec = hasExecution(o);
             const rowClass = hasExec ? 'exec-row' : '';
             const rowClick = hasExec ? `onclick="toggleExecDetail('${o.opportunity_id}')"` : '';
 
             // Realized PnL column
-            let realizedHtml = '<span style="color:#484f58">-</span>';
+            let realizedHtml = '<span style="color:#505a63">-</span>';
             if (o.actual_net_profit !== null && o.actual_net_profit !== undefined) {
                 const rp = Number(o.actual_net_profit);
                 const rpUsd = (rp * 2300).toFixed(2);
-                const rpColor = rp > 0 ? '#3fb950' : rp < 0 ? '#f85149' : '#8b949e';
+                const rpColor = rp > 0 ? '#00a87e' : rp < 0 ? '#e23b4a' : '#8d969e';
                 realizedHtml = `<span style="color:${rpColor};font-weight:bold">$${rpUsd}</span>`;
             }
 
             rows += `<tr class="${rowClass}" ${rowClick}>
-                <td><a href="${API_BASE}/opportunity/${o.opportunity_id}" style="color:#58a6ff" onclick="event.stopPropagation()">${o.opportunity_id.slice(4,16)}</a></td>
+                <td><a href="${API_BASE}/opportunity/${o.opportunity_id}" style="color:#494fdf" onclick="event.stopPropagation()">${o.opportunity_id.slice(4,16)}</a></td>
                 <td>${o.pair}</td>
                 <td>${o.chain}</td>
                 <td>${o.buy_dex}</td>
                 <td>${o.sell_dex}</td>
                 <td>${(Number(o.spread_bps)/100).toFixed(2)}%</td>
-                <td>${showExpected ? `<span style="color:${profitColor};font-weight:bold">$${profitUsd}</span>` : '<span style="color:#484f58">-</span>'}</td>
+                <td>${showExpected ? `<span style="color:${profitColor};font-weight:bold">$${profitUsd}</span>` : '<span style="color:#505a63">-</span>'}</td>
                 <td>${realizedHtml}</td>
                 <td><span class="tag ${tagClass(o.status)}">${o.status}</span></td>
                 <td title="${o.detected_at}">${toESTShort(o.detected_at)}</td>
@@ -600,11 +615,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     <td colspan="10">
                         <div class="exec-grid">
                             <div class="exec-item"><div class="exec-label">TX Hash</div>
-                                <div class="exec-value">${txHash !== 'n/a' ? `<a href="https://arbiscan.io/tx/${txHash}" target="_blank" style="color:#58a6ff">${txShort}</a>` : 'n/a'}</div></div>
+                                <div class="exec-value">${txHash !== 'n/a' ? `<a href="https://arbiscan.io/tx/${txHash}" target="_blank" style="color:#494fdf">${txShort}</a>` : 'n/a'}</div></div>
                             <div class="exec-item"><div class="exec-label">Included</div>
-                                <div class="exec-value" style="color:${o.exec_included ? '#3fb950' : '#f85149'}">${incl}</div></div>
+                                <div class="exec-value" style="color:${o.exec_included ? '#00a87e' : '#e23b4a'}">${incl}</div></div>
                             <div class="exec-item"><div class="exec-label">Reverted</div>
-                                <div class="exec-value" style="color:${o.exec_reverted ? '#f85149' : '#3fb950'}">${rev}</div></div>
+                                <div class="exec-value" style="color:${o.exec_reverted ? '#e23b4a' : '#00a87e'}">${rev}</div></div>
                             <div class="exec-item"><div class="exec-label">Gas Used</div>
                                 <div class="exec-value">${gasUsed.toLocaleString()}</div></div>
                             <div class="exec-item"><div class="exec-label">Gas Cost</div>
@@ -612,7 +627,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                             <div class="exec-item"><div class="exec-label">Realized Profit ${profCur}</div>
                                 <div class="exec-value">${realProfit}</div></div>
                             <div class="exec-item"><div class="exec-label">Net PnL (base)</div>
-                                <div class="exec-value" style="color:${Number(netProfit) >= 0 ? '#3fb950' : '#f85149'}">${netProfit} ETH</div></div>
+                                <div class="exec-value" style="color:${Number(netProfit) >= 0 ? '#00a87e' : '#e23b4a'}">${netProfit} ETH</div></div>
                             <div class="exec-item"><div class="exec-label">Expected</div>
                                 <div class="exec-value">${profitUsd !== '0.00' ? '$'+profitUsd : '-'}</div></div>
                         </div>
@@ -655,7 +670,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const maxVal = Math.max(1, ...sorted.map(([,v]) => v.wins + v.losses));
 
         if (sorted.length === 0) {
-            container.innerHTML = '<div class="bar-chart" style="justify-content:center;align-items:center;color:#484f58">No data for selected filter</div>';
+            container.innerHTML = '<div class="bar-chart" style="justify-content:center;align-items:center;color:#505a63">No data for selected filter</div>';
             return;
         }
 
@@ -668,8 +683,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     ${v.losses > 0 ? `<div class="bar-loss" style="height:${lossH}px" title="${v.losses} losses"></div>` : ''}
                 </div>
                 <div class="bar-label">${chain}</div>
-                <div class="bar-label" style="color:#3fb950">${v.wins}</div>
-                <div class="bar-label" style="color:#f85149">${v.losses}</div>
+                <div class="bar-label" style="color:#00a87e">${v.wins}</div>
+                <div class="bar-label" style="color:#e23b4a">${v.losses}</div>
             </div>`;
         }).join('') + '</div>';
     }
@@ -726,8 +741,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             } else {
                 modeTag = 'DISABLED'; modeColor = 'tag-rejected';
             }
-            const routers = info.has_routers ? '<span style="color:#3fb950">Yes</span>' : '<span style="color:#f85149">No</span>';
-            const aave = info.has_aave ? '<span style="color:#3fb950">Yes</span>' : '<span style="color:#f85149">No</span>';
+            const routers = info.has_routers ? '<span style="color:#00a87e">Yes</span>' : '<span style="color:#e23b4a">No</span>';
+            const aave = info.has_aave ? '<span style="color:#00a87e">Yes</span>' : '<span style="color:#e23b4a">No</span>';
 
             let actions = '';
             if (info.executable) {
@@ -741,7 +756,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                     actions = `<button class="btn btn-green" style="padding:3px 10px;font-size:11px" onclick="setChainMode('${chain}','simulated')">Enable</button>`;
                 }
             } else {
-                actions = '<span style="color:#484f58;font-size:11px">Not executable</span>';
+                actions = '<span style="color:#505a63;font-size:11px">Not executable</span>';
             }
 
             rows += `<tr>
@@ -805,14 +820,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             const short = addr.slice(0,6) + '...' + addr.slice(-4);
             let cards = `<div class="card">
                 <div class="card-title">Wallet</div>
-                <div class="card-value" style="font-size:16px"><a href="https://arbiscan.io/address/${addr}" target="_blank" style="color:#58a6ff">${short}</a></div>
+                <div class="card-value" style="font-size:16px"><a href="https://arbiscan.io/address/${addr}" target="_blank" style="color:#494fdf">${short}</a></div>
             </div>`;
             let totalEth = 0;
             for (const [chain, bal] of Object.entries(data.balances)) {
                 if (bal === null) continue;
                 totalEth += bal;
                 const usd = (bal * 2300).toFixed(2);
-                const color = bal > 0.001 ? '#3fb950' : '#f85149';
+                const color = bal > 0.001 ? '#00a87e' : '#e23b4a';
                 cards += `<div class="card">
                     <div class="card-title">${chain} Balance</div>
                     <div class="card-value" style="color:${color}">${bal.toFixed(6)} ETH</div>
@@ -848,25 +863,28 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
 <html>
 <head>
     <title>Opportunity Detail</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
-               background: #0d1117; color: #c9d1d9; padding: 20px; }
-        h1 { color: #58a6ff; margin-bottom: 8px; }
-        h2 { color: #8b949e; margin: 24px 0 10px; font-size: 14px; text-transform: uppercase; }
-        .back { color: #58a6ff; text-decoration: none; margin-bottom: 16px; display: inline-block; }
-        .section { background: #161b22; border: 1px solid #30363d; border-radius: 8px;
-                   padding: 16px; margin-bottom: 16px; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+               background: #191c1f; color: #f4f4f4; padding: 24px; letter-spacing: 0.16px; }
+        h1 { color: #ffffff; margin-bottom: 8px; font-weight: 600; font-size: 24px; letter-spacing: -0.32px; }
+        h2 { color: #8d969e; margin: 24px 0 10px; font-size: 13px; text-transform: uppercase;
+             font-weight: 600; letter-spacing: 0.24px; }
+        .back { color: #494fdf; text-decoration: none; margin-bottom: 16px; display: inline-block; font-weight: 500; }
+        .section { background: #242729; border-radius: 20px;
+                   padding: 20px; margin-bottom: 16px; }
         table { width: 100%; border-collapse: collapse; }
-        th { text-align: left; padding: 8px 12px; color: #8b949e; font-size: 12px;
+        th { text-align: left; padding: 8px 12px; color: #8d969e; font-size: 12px;
              text-transform: uppercase; width: 200px; }
         td { padding: 8px 12px; font-size: 14px; }
-        .tag { display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; }
-        .tag-approved { background: #23863533; color: #3fb950; }
-        .tag-rejected { background: #da362933; color: #f85149; }
-        .tag-detected { background: #1f6feb33; color: #58a6ff; }
-        .mono { font-family: monospace; color: #f0f6fc; }
-        .empty { color: #484f58; font-style: italic; }
+        .tag { display: inline-block; padding: 3px 12px; border-radius: 9999px; font-size: 12px; font-weight: 600; }
+        .tag-approved { background: rgba(0,168,126,0.15); color: #00a87e; }
+        .tag-rejected { background: rgba(226,59,74,0.15); color: #e23b4a; }
+        .tag-detected { background: rgba(73,79,223,0.15); color: #494fdf; }
+        .mono { font-family: 'Inter', monospace; color: #ffffff; }
+        .empty { color: #505a63; font-style: italic; }
     </style>
 </head>
 <body>
@@ -934,28 +952,28 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
             const gas = Number(p.gas_estimate || 0);
             const net = Number(p.expected_net_profit || 0);
             const netUsd = (net * 2220).toFixed(2);
-            const netColor = net > 0 ? '#3fb950' : '#f85149';
+            const netColor = net > 0 ? '#00a87e' : '#e23b4a';
 
             html += `<h2>Cost Breakdown</h2><div class="section">
             <table>
                 <tr><th>Buy Cost (input)</th><td class="mono">$${inp.toFixed(2)}</td></tr>
                 <tr><th>Sell Proceeds (output)</th><td class="mono">$${out.toFixed(2)}</td></tr>
-                <tr style="border-top:1px solid #30363d">
+                <tr style="border-top:1px solid #2e3236">
                     <th>Gross Spread</th>
                     <td class="mono">$${(out - inp).toFixed(2)}</td></tr>
                 <tr><th style="padding-left:30px">- DEX Fees</th>
-                    <td class="mono" style="color:#f85149">-$${fee.toFixed(4)}</td></tr>
+                    <td class="mono" style="color:#e23b4a">-$${fee.toFixed(4)}</td></tr>
                 <tr><th style="padding-left:30px">- Slippage</th>
-                    <td class="mono" style="color:#f85149">-$${slip.toFixed(4)}</td></tr>
+                    <td class="mono" style="color:#e23b4a">-$${slip.toFixed(4)}</td></tr>
                 <tr><th style="padding-left:30px">- Gas</th>
-                    <td class="mono" style="color:#f85149">-${gas.toFixed(6)} ETH</td></tr>
-                <tr style="border-top:2px solid #58a6ff">
-                    <th style="font-size:14px;color:#f0f6fc">Net Profit</th>
+                    <td class="mono" style="color:#e23b4a">-${gas.toFixed(6)} ETH</td></tr>
+                <tr style="border-top:2px solid #494fdf">
+                    <th style="font-size:14px;color:#ffffff">Net Profit</th>
                     <td class="mono" style="font-size:16px;font-weight:bold;color:${netColor}">
                         ${net.toFixed(6)} ETH (~$${netUsd})
                     </td></tr>
             </table>
-            <div style="margin-top:8px;color:#484f58;font-size:11px">Priced at ${toEST(p.created_at)}</div>
+            <div style="margin-top:8px;color:#505a63;font-size:11px">Priced at ${toEST(p.created_at)}</div>
             </div>`;
         } else {
             html += renderSection('Cost Breakdown', null);
@@ -982,7 +1000,7 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
             if (details.reason_detail)
                 riskHtml += `<tr><th>Detail</th><td class="mono">${details.reason_detail}</td></tr>`;
 
-            riskHtml += `<tr style="border-top:1px solid #30363d"><th colspan="2" style="color:#58a6ff;padding-top:12px">Analysis</th></tr>`;
+            riskHtml += `<tr style="border-top:1px solid #2e3236"><th colspan="2" style="color:#494fdf;padding-top:12px">Analysis</th></tr>`;
 
             if (details.net_profit !== undefined)
                 riskHtml += `<tr><th>Net Profit</th><td class="mono">${num(details.net_profit, 6)} ETH</td></tr>`;
@@ -992,11 +1010,11 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
             // Fee breakdown
             const hasFees = details.dex_fees || details.flash_loan_fee || details.slippage_cost || details.gas_cost;
             if (hasFees) {
-                riskHtml += `<tr style="border-top:1px solid #30363d"><th colspan="2" style="color:#58a6ff;padding-top:12px">Fee Components</th></tr>`;
+                riskHtml += `<tr style="border-top:1px solid #2e3236"><th colspan="2" style="color:#494fdf;padding-top:12px">Fee Components</th></tr>`;
                 if (details.dex_fees && details.dex_fees !== '0')
                     riskHtml += `<tr><th>DEX Fees</th><td class="mono">$${num(details.dex_fees, 4)}</td></tr>`;
                 if (details.fee_included !== undefined)
-                    riskHtml += `<tr><th>Fee Pre-Included</th><td class="mono">${details.fee_included ? '<span style="color:#3fb950">Yes</span> (on-chain quoter)' : 'No (calculated)'}</td></tr>`;
+                    riskHtml += `<tr><th>Fee Pre-Included</th><td class="mono">${details.fee_included ? '<span style="color:#00a87e">Yes</span> (on-chain quoter)' : 'No (calculated)'}</td></tr>`;
                 if (details.flash_loan_fee && details.flash_loan_fee !== '0')
                     riskHtml += `<tr><th>Flash Loan Fee</th><td class="mono">$${num(details.flash_loan_fee, 4)}</td></tr>`;
                 if (details.slippage_cost && details.slippage_cost !== '0')
@@ -1008,17 +1026,17 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
             // Risk signals
             const hasRiskSignals = details.liquidity_score !== undefined || (details.warning_flags && details.warning_flags.length > 0);
             if (hasRiskSignals) {
-                riskHtml += `<tr style="border-top:1px solid #30363d"><th colspan="2" style="color:#58a6ff;padding-top:12px">Risk Signals</th></tr>`;
+                riskHtml += `<tr style="border-top:1px solid #2e3236"><th colspan="2" style="color:#494fdf;padding-top:12px">Risk Signals</th></tr>`;
                 if (details.liquidity_score !== undefined)
                     riskHtml += `<tr><th>Liquidity Score</th><td class="mono">${details.liquidity_score}</td></tr>`;
                 if (details.warning_flags && details.warning_flags.length > 0)
-                    riskHtml += `<tr><th>Warning Flags</th><td class="mono" style="color:#f85149">${details.warning_flags.join(', ')}</td></tr>`;
+                    riskHtml += `<tr><th>Warning Flags</th><td class="mono" style="color:#e23b4a">${details.warning_flags.join(', ')}</td></tr>`;
             }
 
             if (details.simulation)
                 riskHtml += `<tr><th>Mode</th><td class="mono"><span class="tag tag-approved">SIMULATION</span> — would execute if live</td></tr>`;
 
-            riskHtml += `<tr style="border-top:1px solid #30363d"><th>Decided At</th><td class="mono">${toEST(r.created_at)}</td></tr>`;
+            riskHtml += `<tr style="border-top:1px solid #2e3236"><th>Decided At</th><td class="mono">${toEST(r.created_at)}</td></tr>`;
             riskHtml += '</table></div>';
             html += riskHtml;
         } else {
@@ -1077,32 +1095,35 @@ OPS_DASHBOARD_HTML = """<!DOCTYPE html>
 <head>
     <title>Ops &amp; Diagnostics</title>
     <meta http-equiv="refresh" content="30">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
-               background: #0d1117; color: #c9d1d9; padding: 20px; }
-        h1 { color: #58a6ff; margin-bottom: 4px; }
-        h2 { color: #8b949e; margin: 24px 0 10px; font-size: 14px; text-transform: uppercase; }
-        a { color: #58a6ff; text-decoration: none; }
+        body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+               background: #191c1f; color: #f4f4f4; padding: 24px; letter-spacing: 0.16px; }
+        h1 { color: #ffffff; margin-bottom: 4px; font-weight: 600; font-size: 28px; letter-spacing: -0.4px; }
+        h2 { color: #8d969e; margin: 24px 0 10px; font-size: 14px; text-transform: uppercase; }
+        a { color: #494fdf; text-decoration: none; }
         a:hover { text-decoration: underline; }
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
-        .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
-        .card-title { font-size: 12px; color: #8b949e; text-transform: uppercase; margin-bottom: 8px; }
-        .card-value { font-size: 28px; font-weight: bold; color: #f0f6fc; }
-        .card-sub { font-size: 12px; color: #8b949e; margin-top: 4px; }
-        .status-ok { color: #3fb950; }
-        .status-warn { color: #d29922; }
-        .status-bad { color: #f85149; }
+        .card { background: #242729; border-radius: 20px; padding: 20px; }
+        .card-title { font-size: 12px; color: #8d969e; text-transform: uppercase; margin-bottom: 8px;
+                      font-weight: 600; letter-spacing: 0.24px; }
+        .card-value { font-size: 28px; font-weight: 600; color: #ffffff; letter-spacing: -0.32px; }
+        .card-sub { font-size: 12px; color: #8d969e; margin-top: 6px; }
+        .status-ok { color: #00a87e; }
+        .status-warn { color: #ec7e00; }
+        .status-bad { color: #e23b4a; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th { text-align: left; padding: 8px; border-bottom: 2px solid #30363d; color: #8b949e;
-             font-size: 12px; text-transform: uppercase; cursor: pointer; }
-        th:hover { color: #58a6ff; }
-        td { padding: 8px; border-bottom: 1px solid #21262d; font-size: 13px; }
-        tr:hover { background: #1c2128; }
-        .tag { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 11px; }
-        .tag-ok { background: #23863533; color: #3fb950; }
-        .tag-warn { background: #9e6a0333; color: #d29922; }
-        .tag-bad { background: #da362933; color: #f85149; }
+        th { text-align: left; padding: 10px 8px; border-bottom: 2px solid #2e3236; color: #8d969e;
+             font-size: 11px; text-transform: uppercase; cursor: pointer; font-weight: 600; letter-spacing: 0.24px; }
+        th:hover { color: #494fdf; }
+        td { padding: 10px 8px; border-bottom: 1px solid #2a2d31; font-size: 13px; }
+        tr:hover { background: #2a2d31; }
+        .tag { display: inline-block; padding: 3px 10px; border-radius: 9999px; font-size: 11px; font-weight: 600; }
+        .tag-ok { background: rgba(0,168,126,0.15); color: #00a87e; }
+        .tag-warn { background: rgba(236,126,0,0.15); color: #ec7e00; }
+        .tag-bad { background: rgba(226,59,74,0.15); color: #e23b4a; }
         .trend-bar { display: inline-block; height: 14px; border-radius: 3px; vertical-align: middle; }
         .mini-chart { display: flex; align-items: flex-end; gap: 2px; height: 40px; }
         .mini-bar { flex: 1; min-width: 3px; max-width: 8px; border-radius: 2px 2px 0 0; }
@@ -1236,11 +1257,11 @@ OPS_DASHBOARD_HTML = """<!DOCTYPE html>
                 const avgLat = h.latencies.length > 0 ? h.latencies.reduce((a,b)=>a+b,0)/h.latencies.length : 0;
                 const cls = rate >= 0.8 ? 'tag-ok' : rate >= 0.3 ? 'tag-warn' : 'tag-bad';
                 const barW = Math.round(rate * 100);
-                const barColor = rate >= 0.8 ? '#3fb950' : rate >= 0.3 ? '#d29922' : '#f85149';
+                const barColor = rate >= 0.8 ? '#00a87e' : rate >= 0.3 ? '#ec7e00' : '#e23b4a';
                 return `<div class="card">
                     <div class="card-title">${chain}</div>
                     <div class="card-value"><span class="tag ${cls}">${(rate*100).toFixed(0)}%</span></div>
-                    <div style="margin:8px 0;background:#21262d;border-radius:4px;height:14px">
+                    <div style="margin:8px 0;background:#2a2d31;border-radius:4px;height:14px">
                         <div class="trend-bar" style="width:${barW}%;background:${barColor}"></div>
                     </div>
                     <div class="card-sub">${h.ok}/${h.total} quotes OK | avg ${avgLat.toFixed(0)}ms</div>
@@ -1270,7 +1291,7 @@ OPS_DASHBOARD_HTML = """<!DOCTYPE html>
                     <td>${r.success_count}/${r.total_quotes}</td>
                     <td>${r.avg_latency_ms > 0 ? r.avg_latency_ms.toFixed(0)+'ms' : '-'}</td>
                     <td class="${outCls}">${r.last_outcome || '-'}</td>
-                    <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;color:#8b949e;font-size:11px">${r.last_error || '-'}</td>
+                    <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;color:#8d969e;font-size:11px">${r.last_error || '-'}</td>
                 </tr>`;
             }).join('');
 
@@ -1368,41 +1389,41 @@ ANALYTICS_HTML = """<!DOCTYPE html>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, monospace;
-               background: #0d1117; color: #c9d1d9; padding: 20px; }
-        h1 { color: #58a6ff; margin-bottom: 4px; }
-        h2 { color: #8b949e; margin: 24px 0 10px; font-size: 14px; text-transform: uppercase; }
-        a { color: #58a6ff; text-decoration: none; }
+               background: #191c1f; color: #f4f4f4; padding: 20px; }
+        h1 { color: #494fdf; margin-bottom: 4px; }
+        h2 { color: #8d969e; margin: 24px 0 10px; font-size: 14px; text-transform: uppercase; }
+        a { color: #494fdf; text-decoration: none; }
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
-        .card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 16px; }
-        .card-title { font-size: 12px; color: #8b949e; text-transform: uppercase; margin-bottom: 8px; }
-        .card-value { font-size: 28px; font-weight: bold; color: #f0f6fc; }
-        .card-sub { font-size: 12px; color: #8b949e; margin-top: 4px; }
-        .status-ok { color: #3fb950; }
-        .status-bad { color: #f85149; }
-        .status-warn { color: #d29922; }
+        .card { background: #242729; border: 1px solid #2e3236; border-radius: 8px; padding: 16px; }
+        .card-title { font-size: 12px; color: #8d969e; text-transform: uppercase; margin-bottom: 8px; }
+        .card-value { font-size: 28px; font-weight: bold; color: #ffffff; }
+        .card-sub { font-size: 12px; color: #8d969e; margin-top: 4px; }
+        .status-ok { color: #00a87e; }
+        .status-bad { color: #e23b4a; }
+        .status-warn { color: #ec7e00; }
         table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th { text-align: left; padding: 8px; border-bottom: 2px solid #30363d; color: #8b949e;
+        th { text-align: left; padding: 8px; border-bottom: 2px solid #2e3236; color: #8d969e;
              font-size: 12px; text-transform: uppercase; }
-        td { padding: 8px; border-bottom: 1px solid #21262d; font-size: 13px; }
-        tr:hover { background: #1c2128; }
+        td { padding: 8px; border-bottom: 1px solid #2a2d31; font-size: 13px; }
+        tr:hover { background: #2a2d31; }
         .filters { display: flex; gap: 12px; align-items: center; margin: 16px 0; flex-wrap: wrap; }
-        .filters label { color: #8b949e; font-size: 13px; }
-        select, input[type=date] { background: #161b22; color: #c9d1d9; border: 1px solid #30363d;
+        .filters label { color: #8d969e; font-size: 13px; }
+        select, input[type=date] { background: #242729; color: #f4f4f4; border: 1px solid #2e3236;
                  border-radius: 6px; padding: 6px 12px; font-size: 13px; }
         .btn { padding: 6px 16px; border-radius: 6px; font-size: 13px; cursor: pointer;
-               border: 1px solid #30363d; background: #1f6feb; color: #fff; font-weight: bold; }
+               border: 1px solid #2e3236; background: #1f6feb; color: #fff; font-weight: bold; }
         .btn:hover { background: #388bfd; }
         .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
-        .tab { padding: 6px 16px; border-radius: 6px; background: #21262d; color: #8b949e;
-               cursor: pointer; font-size: 13px; border: 1px solid #30363d; text-decoration: none; }
+        .tab { padding: 6px 16px; border-radius: 6px; background: #2a2d31; color: #8d969e;
+               cursor: pointer; font-size: 13px; border: 1px solid #2e3236; text-decoration: none; }
         .tab.active { background: #1f6feb; color: #fff; border-color: #1f6feb; }
         .bar-chart { display: flex; align-items: flex-end; gap: 3px; height: 140px;
-                     background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+                     background: #242729; border: 1px solid #2e3236; border-radius: 8px;
                      padding: 12px; margin-top: 8px; overflow-x: auto; }
         .bar-group { display: flex; flex-direction: column; align-items: center; min-width: 20px; }
-        .bar-pos { background: #3fb950; border-radius: 2px 2px 0 0; min-width: 14px; }
-        .bar-neg { background: #f85149; border-radius: 0 0 2px 2px; min-width: 14px; }
-        .bar-label { font-size: 9px; color: #484f58; margin-top: 2px; white-space: nowrap; }
+        .bar-pos { background: #00a87e; border-radius: 2px 2px 0 0; min-width: 14px; }
+        .bar-neg { background: #e23b4a; border-radius: 0 0 2px 2px; min-width: 14px; }
+        .bar-label { font-size: 9px; color: #505a63; margin-top: 2px; white-space: nowrap; }
         .mono { font-family: monospace; }
     </style>
 </head>
@@ -1529,16 +1550,16 @@ ANALYTICS_HTML = """<!DOCTYPE html>
                 '<td class="mono">' + (r.avg_net_profit ? Number(r.avg_net_profit).toFixed(6) : '0') + '</td>' +
                 '<td class="mono" style="color:' + pnlColor(r.max_net_profit || 0) + '">' +
                 (r.max_net_profit ? Number(r.max_net_profit).toFixed(6) : '0') + '</td></tr>';
-        }).join('') || '<tr><td colspan="6" style="color:#484f58">No scan data yet</td></tr>';
+        }).join('') || '<tr><td colspan="6" style="color:#505a63">No scan data yet</td></tr>';
     }
 
     function renderScanSpreads(rows) {
         document.querySelector('#scan-spread-table tbody').innerHTML = rows.map(function(r) {
             return '<tr><td>' + r.chain + '</td><td><b>' + r.pair + '</b></td><td>' + r.samples +
                 '</td><td class="mono">' + Number(r.avg_spread).toFixed(4) + '%</td>' +
-                '<td class="mono" style="color:#3fb950">' + Number(r.max_spread).toFixed(4) + '%</td>' +
+                '<td class="mono" style="color:#00a87e">' + Number(r.max_spread).toFixed(4) + '%</td>' +
                 '<td class="mono">' + Number(r.min_spread).toFixed(4) + '%</td></tr>';
-        }).join('') || '<tr><td colspan="6" style="color:#484f58">No scan data yet</td></tr>';
+        }).join('') || '<tr><td colspan="6" style="color:#505a63">No scan data yet</td></tr>';
     }
 
     function renderNearMisses(rows) {
@@ -1547,12 +1568,12 @@ ANALYTICS_HTML = """<!DOCTYPE html>
             return '<tr><td>' + ts + '</td><td>' + r.pair + '</td><td>' + r.chain +
                 '</td><td>' + r.buy_dex + '</td><td>' + r.sell_dex +
                 '</td><td class="mono">' + Number(r.spread).toFixed(4) + '%</td>' +
-                '<td class="mono" style="color:#d29922">' + Number(r.net_profit).toFixed(6) + '</td>' +
+                '<td class="mono" style="color:#ec7e00">' + Number(r.net_profit).toFixed(6) + '</td>' +
                 '<td class="mono">' + Number(r.gas_cost).toFixed(6) + '</td></tr>';
-        }).join('') || '<tr><td colspan="8" style="color:#484f58">No near misses yet</td></tr>';
+        }).join('') || '<tr><td colspan="8" style="color:#505a63">No near misses yet</td></tr>';
     }
 
-    function pnlColor(v) { return v > 0 ? '#3fb950' : v < 0 ? '#f85149' : '#8b949e'; }
+    function pnlColor(v) { return v > 0 ? '#00a87e' : v < 0 ? '#e23b4a' : '#8d969e'; }
     function ethUsd(v) { return '$' + (v * 2300).toFixed(2); }
     function pct(a, b) { return b > 0 ? (a / b * 100).toFixed(1) + '%' : '-'; }
 
@@ -1586,7 +1607,7 @@ ANALYTICS_HTML = """<!DOCTYPE html>
 
     function renderHourly(rows) {
         const container = document.getElementById('hourly-chart');
-        if (!rows || rows.length === 0) { container.innerHTML = '<div class="bar-chart" style="justify-content:center;align-items:center;color:#484f58">No trade data</div>'; return; }
+        if (!rows || rows.length === 0) { container.innerHTML = '<div class="bar-chart" style="justify-content:center;align-items:center;color:#505a63">No trade data</div>'; return; }
         const reversed = [...rows].reverse();
         const maxVal = Math.max(0.000001, ...reversed.map(r => Math.abs(r.net_profit)));
         container.innerHTML = '<div class="bar-chart">' + reversed.map(r => {
@@ -1600,30 +1621,30 @@ ANALYTICS_HTML = """<!DOCTYPE html>
     function renderPairs(rows) {
         document.querySelector('#pair-table tbody').innerHTML = rows.map(r => `<tr>
             <td><b>${r.pair}</b></td><td>${r.chain}</td><td>${r.trades}</td>
-            <td style="color:#3fb950">${r.wins}</td><td style="color:#f85149">${r.reverts}</td>
+            <td style="color:#00a87e">${r.wins}</td><td style="color:#e23b4a">${r.reverts}</td>
             <td class="mono" style="color:${pnlColor(r.net_profit)};font-weight:bold">${r.net_profit.toFixed(6)}</td>
             <td class="mono">${r.gas_cost.toFixed(6)}</td>
             <td class="mono">${r.avg_profit.toFixed(6)}</td>
-        </tr>`).join('') || '<tr><td colspan="8" style="color:#484f58">No trade data</td></tr>';
+        </tr>`).join('') || '<tr><td colspan="8" style="color:#505a63">No trade data</td></tr>';
     }
 
     function renderVenues(rows) {
         document.querySelector('#venue-table tbody').innerHTML = rows.map(r => {
             const wr = r.trades > 0 ? (r.wins / r.trades * 100).toFixed(0) : '0';
-            const wrColor = Number(wr) >= 50 ? '#3fb950' : '#f85149';
+            const wrColor = Number(wr) >= 50 ? '#00a87e' : '#e23b4a';
             return `<tr>
                 <td>${r.buy_dex}</td><td>${r.sell_dex}</td><td>${r.chain}</td><td>${r.trades}</td>
                 <td style="color:${wrColor};font-weight:bold">${wr}%</td>
                 <td class="mono" style="color:${pnlColor(r.net_profit)}">${r.net_profit.toFixed(6)}</td>
                 <td class="mono">${r.avg_profit.toFixed(6)}</td>
             </tr>`;
-        }).join('') || '<tr><td colspan="7" style="color:#484f58">No trade data</td></tr>';
+        }).join('') || '<tr><td colspan="7" style="color:#505a63">No trade data</td></tr>';
     }
 
     function renderEVR(rows) {
         document.querySelector('#evr-table tbody').innerHTML = rows.map(r => {
             const capture = r.expected && r.expected !== 0 ? (r.realized / r.expected * 100).toFixed(1) + '%' : '-';
-            const captureColor = r.realized >= r.expected ? '#3fb950' : '#f85149';
+            const captureColor = r.realized >= r.expected ? '#00a87e' : '#e23b4a';
             const txShort = r.tx_hash ? r.tx_hash.slice(0, 10) + '...' : '-';
             const chain = r.chain || 'arbitrum';
             const explorer = chain === 'optimism' ? 'optimistic.etherscan.io' : chain === 'base' ? 'basescan.org' : chain === 'arbitrum' ? 'arbiscan.io' : 'etherscan.io';
@@ -1636,7 +1657,7 @@ ANALYTICS_HTML = """<!DOCTYPE html>
                 <td class="mono">${r.gas_cost ? r.gas_cost.toFixed(6) : '-'}</td>
                 <td>${r.tx_hash ? '<a href="https://' + explorer + '/tx/' + r.tx_hash + '" target="_blank">' + txShort + '</a>' : '-'}</td>
             </tr>`;
-        }).join('') || '<tr><td colspan="9" style="color:#484f58">No included trades yet</td></tr>';
+        }).join('') || '<tr><td colspan="9" style="color:#505a63">No included trades yet</td></tr>';
     }
 
     function renderGas(rows) {
@@ -1645,7 +1666,7 @@ ANALYTICS_HTML = """<!DOCTYPE html>
             <td class="mono">${Math.round(r.avg_gas_used).toLocaleString()}</td>
             <td class="mono">${r.avg_estimated_gas ? Number(r.avg_estimated_gas).toFixed(6) : '-'}</td>
             <td class="mono">${r.avg_gas_cost_eth ? r.avg_gas_cost_eth.toFixed(8) : '-'}</td>
-        </tr>`).join('') || '<tr><td colspan="5" style="color:#484f58">No data</td></tr>';
+        </tr>`).join('') || '<tr><td colspan="5" style="color:#505a63">No data</td></tr>';
     }
 
     function renderRejects(rows) {
@@ -1653,7 +1674,7 @@ ANALYTICS_HTML = """<!DOCTYPE html>
             <td>${r.reason_code}</td><td>${r.chain}</td>
             <td>${r.cnt}</td>
             <td class="mono">${r.avg_expected_profit ? Number(r.avg_expected_profit).toFixed(6) : '0'}</td>
-        </tr>`).join('') || '<tr><td colspan="4" style="color:#484f58">No rejections</td></tr>';
+        </tr>`).join('') || '<tr><td colspan="4" style="color:#505a63">No rejections</td></tr>';
     }
 
     async function loadChains() {
