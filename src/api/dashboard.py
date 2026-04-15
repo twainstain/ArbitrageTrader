@@ -284,7 +284,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         grid.innerHTML = `
             <div class="card">
                 <div class="card-title">Execution</div>
-                <div class="card-value ${statusClass(exec.execution_enabled,'true')}">${exec.execution_enabled ? 'ENABLED' : 'DISABLED'}</div>
+                ${(() => {
+                    const chains = exec.chains || {};
+                    const live = Object.entries(chains).filter(([,v]) => v.mode === 'live').map(([k]) => k);
+                    if (live.length > 0) {
+                        return '<div class="card-value status-ok">' + live.map(c => c.toUpperCase()).join(', ') + ' LIVE</div>'
+                            + '<div class="card-sub">' + (Object.keys(chains).length - live.length) + ' chains simulated</div>';
+                    }
+                    return '<div class="card-value status-warn">ALL SIMULATED</div>';
+                })()}
             </div>
             <div class="card">
                 <div class="card-title">Paused</div>
@@ -633,21 +641,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     // --- Scanner control functions ---
 
     async function loadScannerStatus() {
-        const data = await fetchJSON('/scanner');
+        const [scanData, execData] = await Promise.all([fetchJSON('/scanner'), fetchJSON('/execution')]);
         const el = document.getElementById('scanner-status');
-        if (data.running) {
+        if (scanData.running) {
             el.textContent = 'RUNNING';
             el.className = 'tag tag-approved';
         } else {
             el.textContent = 'STOPPED';
             el.className = 'tag tag-rejected';
         }
+
+        // Determine real execution state from per-chain modes
+        const chains = execData.chains || {};
+        const liveChains = Object.entries(chains).filter(([,v]) => v.mode === 'live').map(([k]) => k);
+        const anyLive = liveChains.length > 0 || execData.execution_enabled;
+
         const execBtn = document.getElementById('exec-toggle');
-        if (data.execution_enabled) {
-            execBtn.textContent = 'GLOBAL: LIVE — Click to Disable';
+        if (anyLive) {
+            const label = liveChains.length > 0 ? liveChains.join(', ').toUpperCase() + ' LIVE' : 'ALL LIVE';
+            execBtn.textContent = label + ' — Click to Pause All';
             execBtn.className = 'btn btn-red';
         } else {
-            execBtn.textContent = 'GLOBAL: SIMULATION — Click to Enable';
+            execBtn.textContent = 'ALL SIMULATED — Use chain toggles below';
             execBtn.className = 'btn btn-gray';
         }
     }
@@ -712,11 +727,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     async function toggleExecution() {
         const current = await fetchJSON('/execution');
-        await fetch(API_BASE + '/execution', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({enabled: !current.execution_enabled}),
-        });
+        const chains = current.chains || {};
+        const liveChains = Object.entries(chains).filter(([,v]) => v.mode === 'live').map(([k]) => k);
+        if (liveChains.length > 0) {
+            // Pause all live chains
+            for (const ch of liveChains) {
+                await fetch(API_BASE + '/execution', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({chain: ch, mode: 'simulated'}),
+                });
+            }
+        } else {
+            // No live chains — toggle global (backward compat)
+            await fetch(API_BASE + '/execution', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({enabled: !current.execution_enabled}),
+            });
+        }
         setTimeout(() => { loadScannerStatus(); loadChainExecStatus(); }, 300);
     }
 
