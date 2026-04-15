@@ -1430,6 +1430,25 @@ ANALYTICS_HTML = """<!DOCTYPE html>
         <tbody></tbody>
     </table>
 
+    <!-- Scan History -->
+    <h2>Scan History — Filter Breakdown</h2>
+    <table id="scan-filter-table">
+        <thead><tr><th>Reason</th><th>Chain</th><th>Count</th><th>Avg Spread</th><th>Avg Net Profit</th><th>Best Net Profit</th></tr></thead>
+        <tbody></tbody>
+    </table>
+
+    <h2>Spread Distribution by Pair</h2>
+    <table id="scan-spread-table">
+        <thead><tr><th>Chain</th><th>Pair</th><th>Samples</th><th>Avg Spread %</th><th>Max Spread %</th><th>Min Spread %</th></tr></thead>
+        <tbody></tbody>
+    </table>
+
+    <h2>Near Misses (Almost Profitable)</h2>
+    <table id="scan-nearmiss-table">
+        <thead><tr><th>Time</th><th>Pair</th><th>Chain</th><th>Buy</th><th>Sell</th><th>Spread %</th><th>Net Profit</th><th>Gas</th></tr></thead>
+        <tbody></tbody>
+    </table>
+
     <script>
     const API_BASE = window.location.pathname.split('/analytics')[0];
 
@@ -1448,7 +1467,10 @@ ANALYTICS_HTML = """<!DOCTYPE html>
 
     async function loadAll() {
         const qs = getFilters();
-        const data = await (await fetch(API_BASE + '/pnl/analytics' + qs)).json();
+        const [data, scanData] = await Promise.all([
+            (await fetch(API_BASE + '/pnl/analytics' + qs)).json(),
+            (await fetch(API_BASE + '/scan-history/summary' + qs)).json().catch(function() { return {}; }),
+        ]);
         renderSummary(data);
         renderHourly(data.hourly_pnl);
         renderPairs(data.per_pair);
@@ -1456,6 +1478,39 @@ ANALYTICS_HTML = """<!DOCTYPE html>
         renderEVR(data.expected_vs_realized);
         renderGas(data.gas_efficiency);
         renderRejects(data.rejection_reasons);
+        renderScanFilters(scanData.filter_breakdown || []);
+        renderScanSpreads(scanData.spread_distribution || []);
+        renderNearMisses(scanData.near_misses || []);
+    }
+
+    function renderScanFilters(rows) {
+        document.querySelector('#scan-filter-table tbody').innerHTML = rows.map(function(r) {
+            return '<tr><td>' + r.filter_reason + '</td><td>' + r.chain + '</td><td>' + r.cnt +
+                '</td><td class="mono">' + (r.avg_spread ? Number(r.avg_spread).toFixed(4) : '0') + '%</td>' +
+                '<td class="mono">' + (r.avg_net_profit ? Number(r.avg_net_profit).toFixed(6) : '0') + '</td>' +
+                '<td class="mono" style="color:' + pnlColor(r.max_net_profit || 0) + '">' +
+                (r.max_net_profit ? Number(r.max_net_profit).toFixed(6) : '0') + '</td></tr>';
+        }).join('') || '<tr><td colspan="6" style="color:#484f58">No scan data yet</td></tr>';
+    }
+
+    function renderScanSpreads(rows) {
+        document.querySelector('#scan-spread-table tbody').innerHTML = rows.map(function(r) {
+            return '<tr><td>' + r.chain + '</td><td><b>' + r.pair + '</b></td><td>' + r.samples +
+                '</td><td class="mono">' + Number(r.avg_spread).toFixed(4) + '%</td>' +
+                '<td class="mono" style="color:#3fb950">' + Number(r.max_spread).toFixed(4) + '%</td>' +
+                '<td class="mono">' + Number(r.min_spread).toFixed(4) + '%</td></tr>';
+        }).join('') || '<tr><td colspan="6" style="color:#484f58">No scan data yet</td></tr>';
+    }
+
+    function renderNearMisses(rows) {
+        document.querySelector('#scan-nearmiss-table tbody').innerHTML = rows.map(function(r) {
+            var ts = r.scan_ts ? r.scan_ts.slice(5, 16) : '-';
+            return '<tr><td>' + ts + '</td><td>' + r.pair + '</td><td>' + r.chain +
+                '</td><td>' + r.buy_dex + '</td><td>' + r.sell_dex +
+                '</td><td class="mono">' + Number(r.spread).toFixed(4) + '%</td>' +
+                '<td class="mono" style="color:#d29922">' + Number(r.net_profit).toFixed(6) + '</td>' +
+                '<td class="mono">' + Number(r.gas_cost).toFixed(6) + '</td></tr>';
+        }).join('') || '<tr><td colspan="8" style="color:#484f58">No near misses yet</td></tr>';
     }
 
     function pnlColor(v) { return v > 0 ? '#3fb950' : v < 0 ? '#f85149' : '#8b949e'; }

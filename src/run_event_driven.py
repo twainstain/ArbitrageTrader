@@ -490,6 +490,25 @@ class EventDrivenScanner:
             # Run scanner — get all ranked opportunities.
             result = self.scanner.scan_and_rank(quotes)
 
+            # Flush scan history to DB async (background thread, no pipeline latency).
+            scan_records = self.scanner.drain_scan_records()
+            if scan_records:
+                import threading
+                from persistence.db import get_db
+                from persistence.repository import Repository
+                def _flush_scan_history(records):
+                    try:
+                        conn = get_db()
+                        if conn is not None:
+                            Repository(conn).save_scan_history(records)
+                    except Exception as exc:
+                        logger.warning("scan_history flush failed: %s", exc)
+                threading.Thread(
+                    target=_flush_scan_history,
+                    args=(scan_records,),
+                    daemon=True,
+                ).start()
+
             if self.latency_tracker:
                 self.latency_tracker.mark("scanner")
 

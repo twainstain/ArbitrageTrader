@@ -159,6 +159,30 @@ CREATE TABLE IF NOT EXISTS discovered_pairs (
     refreshed_at    TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS scan_history (
+    scan_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    scan_ts         TEXT NOT NULL,
+    pair            TEXT NOT NULL,
+    chain           TEXT NOT NULL,
+    buy_dex         TEXT NOT NULL,
+    sell_dex        TEXT NOT NULL,
+    buy_price       TEXT NOT NULL DEFAULT '0',
+    sell_price      TEXT NOT NULL DEFAULT '0',
+    spread_bps      TEXT NOT NULL DEFAULT '0',
+    gross_profit    TEXT NOT NULL DEFAULT '0',
+    net_profit      TEXT NOT NULL DEFAULT '0',
+    gas_cost        TEXT NOT NULL DEFAULT '0',
+    fee_cost        TEXT NOT NULL DEFAULT '0',
+    slippage_cost   TEXT NOT NULL DEFAULT '0',
+    filter_reason   TEXT NOT NULL DEFAULT '',
+    passed          INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_scan_ts ON scan_history(scan_ts);
+CREATE INDEX IF NOT EXISTS idx_scan_chain ON scan_history(chain);
+CREATE INDEX IF NOT EXISTS idx_scan_pair ON scan_history(pair);
+CREATE INDEX IF NOT EXISTS idx_scan_reason ON scan_history(filter_reason);
+
 CREATE INDEX IF NOT EXISTS idx_pairs_chain ON pairs(chain);
 CREATE INDEX IF NOT EXISTS idx_pools_pair ON pools(pair_id);
 CREATE INDEX IF NOT EXISTS idx_pools_chain ON pools(chain);

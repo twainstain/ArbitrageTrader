@@ -297,6 +297,135 @@ class Repository:
             )
         self.conn.commit()
 
+    # ------------------------------------------------------------------
+    # Scan History
+    # ------------------------------------------------------------------
+
+    def save_scan_history(self, rows: list[dict]) -> int:
+        """Batch-insert scan evaluation records.
+
+        Each row is a dict with: pair, chain, buy_dex, sell_dex, buy_price,
+        sell_price, spread_bps, gross_profit, net_profit, gas_cost, fee_cost,
+        slippage_cost, filter_reason, passed.
+        """
+        if not rows:
+            return 0
+        now = _now()
+        for r in rows:
+            self.conn.execute(
+                "INSERT INTO scan_history "
+                "(scan_ts, pair, chain, buy_dex, sell_dex, buy_price, sell_price, "
+                "spread_bps, gross_profit, net_profit, gas_cost, fee_cost, "
+                "slippage_cost, filter_reason, passed) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (now, r.get("pair", ""), r.get("chain", ""),
+                 r.get("buy_dex", ""), r.get("sell_dex", ""),
+                 str(r.get("buy_price", "0")), str(r.get("sell_price", "0")),
+                 str(r.get("spread_bps", "0")), str(r.get("gross_profit", "0")),
+                 str(r.get("net_profit", "0")), str(r.get("gas_cost", "0")),
+                 str(r.get("fee_cost", "0")), str(r.get("slippage_cost", "0")),
+                 r.get("filter_reason", ""), int(r.get("passed", False))),
+            )
+        self.conn.commit()
+        return len(rows)
+
+    def get_scan_history(
+        self,
+        chain: str | None = None,
+        pair: str | None = None,
+        reason: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+        limit: int = 500,
+    ) -> list[dict]:
+        """Query scan history with filters."""
+        conditions = []
+        params: list = []
+        if chain:
+            conditions.append("chain = ?")
+            params.append(chain)
+        if pair:
+            conditions.append("pair = ?")
+            params.append(pair)
+        if reason:
+            conditions.append("filter_reason = ?")
+            params.append(reason)
+        if since:
+            conditions.append("scan_ts >= ?")
+            params.append(since)
+        if until:
+            conditions.append("scan_ts <= ?")
+            params.append(until)
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        rows = self.conn.execute(
+            f"SELECT * FROM scan_history{where} ORDER BY scan_ts DESC LIMIT ?",
+            tuple(params) + (limit,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def get_scan_summary(
+        self,
+        chain: str | None = None,
+        since: str | None = None,
+        until: str | None = None,
+    ) -> dict:
+        """Aggregate scan history: filter breakdown, near-miss analysis, spread stats."""
+        conditions = []
+        params: list = []
+        if chain:
+            conditions.append("chain = ?")
+            params.append(chain)
+        if since:
+            conditions.append("scan_ts >= ?")
+            params.append(since)
+        if until:
+            conditions.append("scan_ts <= ?")
+            params.append(until)
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        tp = tuple(params)
+
+        # Filter breakdown
+        filter_rows = self.conn.execute(
+            f"SELECT filter_reason, chain, COUNT(*) as cnt, "
+            f"AVG(CAST(spread_bps AS REAL)) as avg_spread, "
+            f"AVG(CAST(net_profit AS REAL)) as avg_net_profit, "
+            f"MAX(CAST(net_profit AS REAL)) as max_net_profit "
+            f"FROM scan_history{where} "
+            f"GROUP BY filter_reason, chain ORDER BY cnt DESC",
+            tp,
+        ).fetchall()
+
+        # Near-misses: unprofitable but within 0.002 ETH of threshold
+        near_miss_rows = self.conn.execute(
+            f"SELECT pair, chain, buy_dex, sell_dex, "
+            f"CAST(spread_bps AS REAL) as spread, "
+            f"CAST(net_profit AS REAL) as net_profit, "
+            f"CAST(gas_cost AS REAL) as gas_cost, scan_ts "
+            f"FROM scan_history{where + (' AND ' if where else ' WHERE ')}"
+            f"filter_reason = 'unprofitable' AND CAST(net_profit AS REAL) > -0.002 "
+            f"ORDER BY CAST(net_profit AS REAL) DESC LIMIT 50",
+            tp,
+        ).fetchall()
+
+        # Spread distribution per chain
+        spread_rows = self.conn.execute(
+            f"SELECT chain, pair, "
+            f"COUNT(*) as samples, "
+            f"AVG(CAST(spread_bps AS REAL)) as avg_spread, "
+            f"MAX(CAST(spread_bps AS REAL)) as max_spread, "
+            f"MIN(CAST(spread_bps AS REAL)) as min_spread "
+            f"FROM scan_history{where + (' AND ' if where else ' WHERE ')}"
+            f"CAST(spread_bps AS REAL) > 0 "
+            f"GROUP BY chain, pair ORDER BY avg_spread DESC",
+            tp,
+        ).fetchall()
+
+        return {
+            "filter_breakdown": [dict(r) for r in filter_rows],
+            "near_misses": [dict(r) for r in near_miss_rows],
+            "spread_distribution": [dict(r) for r in spread_rows],
+        }
+
     def save_diagnostics_snapshot(self, snapshot: dict[str, dict]) -> int:
         """Persist a QuoteDiagnostics snapshot to DB for historical trending."""
         now = _now()

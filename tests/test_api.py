@@ -666,5 +666,116 @@ class WalletBalanceEndpointTests(_APITestBase):
             os.environ.pop("EXECUTOR_PRIVATE_KEY", None)
 
 
+class ScanHistoryTests(_APITestBase):
+    """Tests for scan history persistence and API."""
+
+    def test_save_and_query_scan_history(self):
+        records = [
+            {"pair": "WETH/USDC", "chain": "arbitrum", "buy_dex": "Uni", "sell_dex": "Sushi",
+             "buy_price": "2340", "sell_price": "2345", "spread_bps": "0.21",
+             "gross_profit": "5", "net_profit": "0.001", "gas_cost": "0.0002",
+             "fee_cost": "2", "slippage_cost": "1", "filter_reason": "passed", "passed": True},
+            {"pair": "WETH/USDC", "chain": "ethereum", "buy_dex": "Sushi", "sell_dex": "Uni",
+             "buy_price": "2335", "sell_price": "2345", "spread_bps": "0.43",
+             "gross_profit": "10", "net_profit": "-0.003", "gas_cost": "0.005",
+             "fee_cost": "4", "slippage_cost": "2", "filter_reason": "unprofitable", "passed": False},
+            {"pair": "WETH/USDT", "chain": "base", "buy_dex": "Aero", "sell_dex": "Uni",
+             "buy_price": "2300", "sell_price": "2315", "spread_bps": "0.65",
+             "gross_profit": "15", "net_profit": "0.004", "gas_cost": "0.0001",
+             "fee_cost": "3", "slippage_cost": "1.5", "filter_reason": "low_liquidity", "passed": False},
+        ]
+        saved = self.repo.save_scan_history(records)
+        self.assertEqual(saved, 3)
+
+        # Query all
+        all_rows = self.repo.get_scan_history()
+        self.assertEqual(len(all_rows), 3)
+
+        # Filter by chain
+        arb_rows = self.repo.get_scan_history(chain="arbitrum")
+        self.assertEqual(len(arb_rows), 1)
+        self.assertEqual(arb_rows[0]["pair"], "WETH/USDC")
+
+        # Filter by reason
+        unprofitable = self.repo.get_scan_history(reason="unprofitable")
+        self.assertEqual(len(unprofitable), 1)
+        self.assertEqual(unprofitable[0]["chain"], "ethereum")
+
+    def test_scan_summary(self):
+        records = [
+            {"pair": "WETH/USDC", "chain": "arbitrum", "buy_dex": "Uni", "sell_dex": "Sushi",
+             "spread_bps": "0.15", "net_profit": "0.001", "filter_reason": "passed", "passed": True},
+            {"pair": "WETH/USDC", "chain": "arbitrum", "buy_dex": "Sushi", "sell_dex": "Uni",
+             "spread_bps": "0.12", "net_profit": "-0.0005", "filter_reason": "unprofitable", "passed": False},
+            {"pair": "WETH/USDT", "chain": "base", "buy_dex": "Aero", "sell_dex": "Uni",
+             "spread_bps": "0.58", "net_profit": "-0.001", "filter_reason": "unprofitable", "passed": False},
+        ]
+        self.repo.save_scan_history(records)
+
+        summary = self.repo.get_scan_summary()
+        self.assertIn("filter_breakdown", summary)
+        self.assertIn("spread_distribution", summary)
+        self.assertIn("near_misses", summary)
+        self.assertTrue(len(summary["filter_breakdown"]) > 0)
+
+    def test_scan_history_api_endpoint(self):
+        records = [
+            {"pair": "WETH/USDC", "chain": "arbitrum", "buy_dex": "Uni", "sell_dex": "Sushi",
+             "spread_bps": "0.15", "filter_reason": "passed", "passed": True},
+        ]
+        self.repo.save_scan_history(records)
+
+        resp = self.client.get("/scan-history")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(len(data), 1)
+
+    def test_scan_summary_api_endpoint(self):
+        records = [
+            {"pair": "WETH/USDC", "chain": "arbitrum", "buy_dex": "Uni", "sell_dex": "Sushi",
+             "spread_bps": "0.15", "filter_reason": "unprofitable", "passed": False},
+        ]
+        self.repo.save_scan_history(records)
+
+        resp = self.client.get("/scan-history/summary")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertIn("filter_breakdown", data)
+
+    def test_scan_history_chain_filter(self):
+        records = [
+            {"pair": "WETH/USDC", "chain": "arbitrum", "buy_dex": "Uni", "sell_dex": "Sushi",
+             "spread_bps": "0.15", "filter_reason": "passed", "passed": True},
+            {"pair": "WETH/USDC", "chain": "base", "buy_dex": "Aero", "sell_dex": "Uni",
+             "spread_bps": "0.42", "filter_reason": "unprofitable", "passed": False},
+        ]
+        self.repo.save_scan_history(records)
+
+        resp = self.client.get("/scan-history?chain=base")
+        data = resp.json()
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["chain"], "base")
+
+    def test_scan_history_window_filter(self):
+        records = [
+            {"pair": "WETH/USDC", "chain": "arbitrum", "buy_dex": "Uni", "sell_dex": "Sushi",
+             "spread_bps": "0.15", "filter_reason": "passed", "passed": True},
+        ]
+        self.repo.save_scan_history(records)
+
+        resp = self.client.get("/scan-history?window=24h")
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(len(resp.json()) > 0)
+
+    def test_analytics_dashboard_has_scan_sections(self):
+        resp = self.client.get("/analytics")
+        html = resp.text
+        self.assertIn("scan-filter-table", html)
+        self.assertIn("scan-spread-table", html)
+        self.assertIn("scan-nearmiss-table", html)
+        self.assertIn("renderScanFilters", html)
+        self.assertIn("renderNearMisses", html)
+
+
 if __name__ == "__main__":
     unittest.main()

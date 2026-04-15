@@ -66,6 +66,9 @@ class OpportunityScanner:
         self.alert_min_net_profit = alert_min_net_profit
         self.alert_max_warning_flags = alert_max_warning_flags
         self._history: list[ScanResult] = []
+        # Scan history records collected during _find_all_opportunities.
+        # Flushed to DB async by the caller after the scan cycle.
+        self._pending_scan_records: list[dict] = []
 
     def scan_and_rank(self, quotes: list[MarketQuote]) -> ScanResult:
         """Evaluate all cross-DEX pairs, rank, filter, and return a ScanResult."""
@@ -122,6 +125,7 @@ class OpportunityScanner:
         _MAX_DEV = D("0.02")
 
         results: list[Opportunity] = []
+        scan_records: list[dict] = []
         skipped_same_dex = 0
         skipped_diff_pair = 0
         skipped_unprofitable = 0
@@ -129,6 +133,42 @@ class OpportunityScanner:
         skipped_low_liq = 0
         skipped_price_deviation = 0
         evaluated = 0
+
+        # Helper to resolve chain from DEX name.
+        _dex_chain: dict[str, str] = {}
+        for dex_cfg in self.config.dexes:
+            _dex_chain[dex_cfg.name] = dex_cfg.chain or ""
+
+        def _record(buy_q: MarketQuote, sell_q: MarketQuote,
+                     opp: Opportunity | None, reason: str) -> None:
+            chain = _dex_chain.get(buy_q.dex, "")
+            if opp is not None:
+                scan_records.append({
+                    "pair": opp.pair, "chain": opp.chain or chain,
+                    "buy_dex": opp.buy_dex, "sell_dex": opp.sell_dex,
+                    "buy_price": str(buy_q.buy_price), "sell_price": str(sell_q.sell_price),
+                    "spread_bps": str(opp.gross_spread_pct),
+                    "gross_profit": str(opp.gross_profit_quote),
+                    "net_profit": str(opp.net_profit_base),
+                    "gas_cost": str(opp.gas_cost_base),
+                    "fee_cost": str(opp.dex_fee_cost_quote),
+                    "slippage_cost": str(opp.slippage_cost_quote),
+                    "filter_reason": reason, "passed": reason == "passed",
+                })
+            else:
+                # Unprofitable — compute basic spread from quotes.
+                mid = (buy_q.buy_price + sell_q.sell_price) / D("2")
+                spread = ((sell_q.sell_price - buy_q.buy_price) / buy_q.buy_price * D("100")) if buy_q.buy_price > 0 else ZERO
+                gas = self.config.gas_cost_for_chain(chain)
+                scan_records.append({
+                    "pair": buy_q.pair, "chain": chain,
+                    "buy_dex": buy_q.dex, "sell_dex": sell_q.dex,
+                    "buy_price": str(buy_q.buy_price), "sell_price": str(sell_q.sell_price),
+                    "spread_bps": str(spread),
+                    "gross_profit": "0", "net_profit": "0",
+                    "gas_cost": str(gas), "fee_cost": "0", "slippage_cost": "0",
+                    "filter_reason": reason, "passed": False,
+                })
 
         # Pre-group quotes by pair to eliminate O(n^2) cross-pair comparisons.
         by_pair: dict[str, list[MarketQuote]] = {}
@@ -147,9 +187,11 @@ class OpportunityScanner:
                     opp = self.strategy.evaluate_pair(buy_quote, sell_quote)
                     if opp is None:
                         skipped_unprofitable += 1
+                        _record(buy_quote, sell_quote, None, "unprofitable")
                         continue
                     if opp.is_cross_chain:
                         skipped_cross_chain += 1
+                        _record(buy_quote, sell_quote, opp, "cross_chain")
                         continue
                     buy_liq = buy_quote.liquidity_usd
                     sell_liq = sell_quote.liquidity_usd
@@ -157,12 +199,15 @@ class OpportunityScanner:
                     max_liq = max(buy_liq, sell_liq)
                     if min_liq > ZERO and min_liq < _MIN_LIQ:
                         skipped_low_liq += 1
+                        _record(buy_quote, sell_quote, opp, "low_liquidity")
                         continue
                     if min_liq == ZERO and max_liq > ZERO:
                         skipped_low_liq += 1
+                        _record(buy_quote, sell_quote, opp, "low_liquidity")
                         continue
                     if self._price_deviates_from_chain(buy_quote, _chain_medians, _MAX_DEV):
                         skipped_price_deviation += 1
+                        _record(buy_quote, sell_quote, opp, "price_deviation")
                         logger.info(
                             "Price deviation: %s on %s deviates from chain median",
                             buy_quote.pair, buy_quote.dex,
@@ -170,12 +215,17 @@ class OpportunityScanner:
                         continue
                     if self._price_deviates_from_chain(sell_quote, _chain_medians, _MAX_DEV):
                         skipped_price_deviation += 1
+                        _record(buy_quote, sell_quote, opp, "price_deviation")
                         logger.info(
                             "Price deviation: %s on %s deviates from chain median",
                             sell_quote.pair, sell_quote.dex,
                         )
                         continue
                     results.append(opp)
+                    _record(buy_quote, sell_quote, opp, "passed")
+
+        # Store scan records for async flush (does NOT block the pipeline).
+        self._pending_scan_records = scan_records
 
         logger.info(
             "[scanner] %d quotes → %d pairs evaluated | "
@@ -185,6 +235,12 @@ class OpportunityScanner:
             skipped_price_deviation, len(results),
         )
         return results
+
+    def drain_scan_records(self) -> list[dict]:
+        """Return and clear pending scan records for async DB flush."""
+        records = self._pending_scan_records
+        self._pending_scan_records = []
+        return records
 
     @staticmethod
     def _compute_chain_medians(quotes: list[MarketQuote]) -> dict[str, Decimal]:

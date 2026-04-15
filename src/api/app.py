@@ -412,6 +412,44 @@ def create_app(
         repo = _get_repo()
         return repo.get_pnl_analytics(chain=chain, since=since, until=until)
 
+    @app.get("/scan-history")
+    def get_scan_history(
+        chain: Optional[str] = None,
+        pair: Optional[str] = None,
+        reason: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        window: Optional[str] = None,
+        limit: int = 500,
+    ):
+        """Query scan history — every evaluated pair per scan cycle."""
+        if window and not since:
+            from observability.time_windows import WINDOWS
+            from datetime import datetime, timezone
+            td = WINDOWS.get(window)
+            if td:
+                since = (datetime.now(timezone.utc) - td).isoformat()
+        repo = _get_repo()
+        return repo.get_scan_history(chain=chain, pair=pair, reason=reason,
+                                      since=since, until=until, limit=limit)
+
+    @app.get("/scan-history/summary")
+    def get_scan_summary(
+        chain: Optional[str] = None,
+        since: Optional[str] = None,
+        until: Optional[str] = None,
+        window: Optional[str] = None,
+    ):
+        """Aggregate scan history: filter breakdown, near-misses, spread stats."""
+        if window and not since:
+            from observability.time_windows import WINDOWS
+            from datetime import datetime, timezone
+            td = WINDOWS.get(window)
+            if td:
+                since = (datetime.now(timezone.utc) - td).isoformat()
+        repo = _get_repo()
+        return repo.get_scan_summary(chain=chain, since=since, until=until)
+
     @app.get("/funnel")
     def get_funnel():
         repo = _get_repo()

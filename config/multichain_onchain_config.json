@@ -17,7 +17,7 @@
   "poll_interval_seconds": 15.0,
   "chain_execution_mode": {
     "arbitrum": "live",
-    "optimism": "simulated",
+    "optimism": "live",
     "ethereum": "simulated",
     "base": "live"
   },
