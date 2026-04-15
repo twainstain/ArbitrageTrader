@@ -9,17 +9,83 @@
 
 ## 1. System Overview
 
-```
-Swap event detected  ->  scanner ranks  ->  queue  ->  pipeline consumer  ->  DB  ->  dashboard
+### High-level architecture
 
-1. OnChainMarket polls DEX quotes via RPC (Uniswap V3, Sushi, Balancer, ...)
-2. OpportunityScanner compares every cross-DEX pair, scores them
-3. Best candidates enter a bounded priority queue
-4. PipelineConsumer pops from queue, runs a 6-stage lifecycle:
-       detect -> price -> risk -> simulate -> submit -> verify
-5. Each stage persists to the database (Postgres or SQLite)
-6. CircuitBreaker pauses execution on repeated failures
-7. Alerting sends big wins to Telegram, hourly/daily reports to email
+```mermaid
+graph LR
+    subgraph Data Layer
+        RPC[RPC Nodes<br/>Alchemy / Infura]
+        DB[(PostgreSQL<br/>or SQLite)]
+    end
+
+    subgraph Core Engine
+        OM[OnChainMarket<br/>quote fetching]
+        SC[OpportunityScanner<br/>detect & rank]
+        Q[CandidateQueue<br/>priority queue]
+        PL[CandidatePipeline<br/>6-stage lifecycle]
+    end
+
+    subgraph Safety
+        RP[RiskPolicy<br/>8-rule gate]
+        CB[CircuitBreaker<br/>auto-pause]
+    end
+
+    subgraph Execution
+        CE[ChainExecutor<br/>tx build & send]
+        VR[OnChainVerifier<br/>PnL reconcile]
+    end
+
+    subgraph Outputs
+        DASH[Dashboard<br/>FastAPI + HTML]
+        ALERT[Alerting<br/>Email / Telegram]
+    end
+
+    RPC --> OM --> SC --> Q --> PL
+    PL --> RP
+    PL --> CB
+    PL --> CE --> VR
+    PL --> DB
+    DB --> DASH
+    PL --> ALERT
+```
+
+### Threading model
+
+```mermaid
+graph TD
+    MAIN["Main Thread<br/><b>EventDrivenScanner</b><br/>polls blocks, fetches quotes,<br/>pushes to queue"]
+    PIPE["Consumer Thread<br/><b>PipelineConsumer</b><br/>pops queue, runs 6-stage pipeline"]
+    HOUR["Daemon Thread<br/><b>SmartAlerter</b><br/>hourly + daily email reports"]
+    DIAG["Daemon Thread<br/><b>QuoteDiagnostics</b><br/>flush health to DB every 5 min"]
+    API["Daemon Thread<br/><b>FastAPI / Uvicorn</b><br/>dashboard + API endpoints"]
+
+    MAIN -->|"CandidateQueue<br/>(thread-safe)"| PIPE
+    PIPE -->|"maybe_send_hourly()"| HOUR
+    MAIN -.->|"signal handlers<br/>SIGINT / SIGTERM"| MAIN
+```
+
+### Data flow
+
+```mermaid
+flowchart TD
+    A[Poll RPC for swap events] --> B[Fetch fresh DEX quotes]
+    B --> C[Scanner: filter & rank]
+    C --> D{Queue full?}
+    D -->|No| E[Push to queue]
+    D -->|Yes, score > lowest| F[Evict lowest, push new]
+    D -->|Yes, score < lowest| G[Drop candidate]
+    E --> H[Pipeline consumer pops]
+    F --> H
+    H --> I[Detect: persist to DB]
+    I --> J[Price: cost waterfall]
+    J --> K[Risk: 8-rule evaluation]
+    K -->|Rejected| L[Log reason, stop]
+    K -->|Sim-approved| M[Log as dry-run, stop]
+    K -->|Approved| N[Simulate: eth_call]
+    N -->|Revert| L
+    N -->|Pass| O[Submit: sign & send tx]
+    O --> P[Verify: check receipt]
+    P --> Q[Reconcile PnL]
 ```
 
 ---
@@ -31,6 +97,32 @@ Swap event detected  ->  scanner ranks  ->  queue  ->  pipeline consumer  ->  DB
 For every scan cycle the scanner fetches fresh quotes from all configured DEXes
 and chains, then evaluates **every cross-DEX pair** looking for price
 discrepancies that survive the cost model.
+
+### Scanner workflow
+
+```mermaid
+flowchart TD
+    START[New scan cycle] --> FETCH[Fetch quotes from all DEXes]
+    FETCH --> GROUP[Group quotes by pair]
+    GROUP --> MEDIAN[Compute per-chain price medians]
+    MEDIAN --> PAIRS[Generate all cross-DEX pairs]
+    PAIRS --> F1{Same DEX?}
+    F1 -->|Yes| DROP1[Skip]
+    F1 -->|No| F2{Cross-chain?}
+    F2 -->|Yes| DROP2[Skip]
+    F2 -->|No| F3{Negative spread?}
+    F3 -->|Yes| DROP3[Skip]
+    F3 -->|No| F4{Liquidity < $1M?}
+    F4 -->|Yes| DROP4[Skip]
+    F4 -->|No| F5{Price > 2% from median?}
+    F5 -->|Yes| DROP5[Skip]
+    F5 -->|No| COST[Run cost model]
+    COST --> SCORE[Composite scoring]
+    SCORE --> RANK[Rank by score descending]
+    RANK --> ALERT_FILTER{Net profit > min?<br/>Flags <= max?}
+    ALERT_FILTER -->|No| DROP6[Skip]
+    ALERT_FILTER -->|Yes| QUEUE[Push to CandidateQueue]
+```
 
 ### Filtering pipeline (applied in order)
 
@@ -72,6 +164,26 @@ mirages.
 
 Every opportunity goes through a full cost waterfall before profit is
 calculated.  **All intermediate math uses `Decimal` — never `float`.**
+
+### Cost waterfall diagram
+
+```mermaid
+flowchart TD
+    A["<b>Gross Spread</b><br/>sell_price - buy_price"] --> B["- DEX Fees<br/>(buy fee + sell fee)"]
+    B --> C["- Slippage<br/>dynamic: scales with trade_size/liquidity"]
+    C --> D["- Flash Loan Fee<br/>Aave: 9 bps, Balancer: 0 bps"]
+    D --> E["= Net Profit (quote)<br/>in USDC"]
+    E --> F["/ mid_price<br/>convert to base asset"]
+    F --> G["- Gas Cost (base)<br/>estimated from chain"]
+    G --> H["= <b>Net Profit (base)</b><br/>in WETH"]
+
+    style A fill:#00a87e,color:#fff
+    style H fill:#00a87e,color:#fff
+    style B fill:#e23b4a,color:#fff
+    style C fill:#e23b4a,color:#fff
+    style D fill:#e23b4a,color:#fff
+    style G fill:#e23b4a,color:#fff
+```
 
 ### Formula
 
@@ -117,9 +229,38 @@ score = min(1.0, log10(min_liquidity_usd) / 7.0)
 
 ## 4. Risk Policy (`risk/policy.py`)
 
-Once an opportunity is priced, the risk policy runs **seven sequential
+Once an opportunity is priced, the risk policy runs **eight sequential
 checks**.  A failure at any step is a **hard veto** — the opportunity is
 rejected immediately.
+
+### Risk evaluation flowchart
+
+```mermaid
+flowchart TD
+    IN[Opportunity priced] --> R1{Execution mode?}
+    R1 -->|disabled| REJ[REJECTED]
+    R1 -->|live or simulated| R2{Spread >= chain min?}
+    R2 -->|No| REJ
+    R2 -->|Yes| R3{Net profit >= 0.005 WETH?}
+    R3 -->|No| REJ
+    R3 -->|Yes| R4{Warning flags <= 1?}
+    R4 -->|No| REJ
+    R4 -->|Yes| R5{Liquidity score >= 0.3?}
+    R5 -->|No| REJ
+    R5 -->|Yes| R6{Gas/profit ratio <= 50%?}
+    R6 -->|No| REJ
+    R6 -->|Yes| R7{Trades this hour < 100?}
+    R7 -->|No| REJ
+    R7 -->|Yes| R8{Pair exposure < 10 WETH?}
+    R8 -->|No| REJ
+    R8 -->|Yes| MODE{Execution enabled<br/>for this chain?}
+    MODE -->|Yes| APP[APPROVED<br/>proceed to simulate]
+    MODE -->|No| SIM[SIMULATION_APPROVED<br/>log as dry-run]
+
+    style REJ fill:#e23b4a,color:#fff
+    style APP fill:#00a87e,color:#fff
+    style SIM fill:#ec7e00,color:#fff
+```
 
 ### Evaluation order
 
@@ -163,12 +304,18 @@ detects degraded conditions.
 
 ### State machine
 
-```
-CLOSED  ──(trip condition)──>  OPEN  ──(cooldown expires)──>  HALF_OPEN
-   ^                                                              |
-   └──────────(probe succeeds)────────────────────────────────────┘
-                                                                  |
-                         OPEN  <──────(probe fails)───────────────┘
+```mermaid
+stateDiagram-v2
+    [*] --> CLOSED
+    CLOSED --> OPEN : Trip condition met<br/>(reverts, RPC errors,<br/>stale data, block exposure)
+    OPEN --> HALF_OPEN : Cooldown expires<br/>(300 seconds)
+    HALF_OPEN --> CLOSED : Probe trade succeeds
+    HALF_OPEN --> OPEN : Probe trade fails
+    CLOSED --> CLOSED : Normal operation<br/>(monitor events)
+
+    note right of CLOSED : All trades allowed
+    note right of OPEN : All trades BLOCKED
+    note right of HALF_OPEN : One probe trade allowed
 ```
 
 ### Trip conditions
@@ -195,13 +342,32 @@ Every opportunity flows through a **six-stage pipeline**.  Each stage persists
 its result to the database before proceeding.  A failure at any stage stops the
 pipeline for that opportunity.
 
-```
-  Stage 1: DETECT    ->  Create opportunity record in DB
-  Stage 2: PRICE     ->  Calculate all costs, expected net profit
-  Stage 3: RISK      ->  Run 8-rule evaluation, verdict: approved/rejected/simulation_approved
-  Stage 4: SIMULATE  ->  Free dry-run via eth_call (catches reverts before real gas)
-  Stage 5: SUBMIT    ->  Sign and broadcast transaction (Flashbots or public mempool)
-  Stage 6: VERIFY    ->  Check inclusion, extract realized profit, reconcile vs expected
+```mermaid
+flowchart LR
+    subgraph "Batched DB write"
+        S1["1. DETECT<br/>create record"]
+        S2["2. PRICE<br/>cost waterfall"]
+        S3["3. RISK<br/>8-rule gate"]
+    end
+    subgraph "External calls"
+        S4["4. SIMULATE<br/>eth_call dry-run"]
+        S5["5. SUBMIT<br/>sign & broadcast"]
+        S6["6. VERIFY<br/>check receipt"]
+    end
+
+    S1 --> S2 --> S3
+    S3 -->|approved| S4
+    S3 -->|rejected| STOP1[Stop]
+    S3 -->|sim_approved| STOP2[Log dry-run]
+    S4 -->|pass| S5
+    S4 -->|revert| STOP3[Stop]
+    S5 --> S6
+    S6 --> RESULT["included / reverted / not_included"]
+
+    style STOP1 fill:#e23b4a,color:#fff
+    style STOP2 fill:#ec7e00,color:#fff
+    style STOP3 fill:#e23b4a,color:#fff
+    style RESULT fill:#00a87e,color:#fff
 ```
 
 ### Timing instrumentation
@@ -240,6 +406,32 @@ This ensures the pipeline always processes the best available opportunities.
 ---
 
 ## 8. On-Chain Execution (`chain_executor.py`)
+
+### Execution workflow
+
+```mermaid
+flowchart TD
+    OPP[Approved opportunity] --> RESOLVE[Resolve token addresses<br/>from CHAIN_TOKENS registry]
+    RESOLVE --> ROUTER[Look up swap router<br/>for buy_dex and sell_dex]
+    ROUTER --> TYPE{Swap type?}
+    TYPE -->|Uniswap/Sushi/Pancake| V3["V3 swap<br/>exactInputSingle()"]
+    TYPE -->|Velodrome/Aerodrome| VELO["Solidly swap<br/>swapExactTokensForTokens()"]
+    V3 --> BUILD[Build executeArbitrage() calldata]
+    VELO --> BUILD
+    BUILD --> GAS[Estimate gas * 1.2x buffer]
+    GAS --> SIM{Simulate via eth_call}
+    SIM -->|Reverts| ABORT[Abort — no gas spent]
+    SIM -->|Success| CHAIN{Which chain?}
+    CHAIN -->|Ethereum| FB[Flashbots bundle<br/>target: current_block + 1]
+    CHAIN -->|L2s| PUB[Public mempool]
+    FB --> WAIT[Wait for receipt<br/>timeout: 120s]
+    PUB --> WAIT
+    WAIT --> VERIFY[Verify outcome]
+
+    style ABORT fill:#e23b4a,color:#fff
+    style FB fill:#494fdf,color:#fff
+    style PUB fill:#494fdf,color:#fff
+```
 
 ### Transaction building
 
@@ -280,7 +472,30 @@ gas spent).
 
 ## 9. Verification & PnL Reconciliation (`pipeline/verifier.py`)
 
-After a transaction is submitted, the verifier checks the on-chain outcome:
+After a transaction is submitted, the verifier checks the on-chain outcome.
+
+### Verification workflow
+
+```mermaid
+flowchart TD
+    TX[tx_hash from submission] --> RECEIPT[Fetch transaction receipt]
+    RECEIPT --> STATUS{receipt.status?}
+    STATUS -->|0| REVERTED["REVERTED<br/>record gas_used, no profit"]
+    STATUS -->|No receipt| NI["NOT_INCLUDED<br/>bundle expired or dropped"]
+    STATUS -->|1| LOGS[Parse event logs]
+    LOGS --> PROFIT{ProfitRealized event?}
+    PROFIT -->|Yes| EXTRACT1[Extract profit amount]
+    PROFIT -->|No| EXTRACT2[Fallback: ERC-20 Transfer events]
+    EXTRACT1 --> GASCALC["Gas cost = gas_used * gas_price / 1e18"]
+    EXTRACT2 --> GASCALC
+    GASCALC --> NET["Net = realized_profit - gas_cost"]
+    NET --> RECONCILE["Compare vs expected profit<br/>flag if deviation > 20%"]
+    RECONCILE --> PERSIST[Persist trade_result to DB]
+
+    style REVERTED fill:#e23b4a,color:#fff
+    style NI fill:#ec7e00,color:#fff
+    style PERSIST fill:#00a87e,color:#fff
+```
 
 ### Verification steps
 
@@ -380,30 +595,111 @@ All financial fields are `Decimal`.  Float-to-Decimal conversion goes through
 
 ---
 
-## 13. End-to-End Decision Flow
+## 13. Flash Loan Arbitrage Sequence
 
+```mermaid
+sequenceDiagram
+    participant Bot as Arbitrage Bot
+    participant Aave as Aave V3 Pool
+    participant Contract as FlashArbExecutor
+    participant BuyDEX as Buy DEX (cheaper)
+    participant SellDEX as Sell DEX (expensive)
+
+    Bot->>Contract: executeArbitrage(tokens, routers, amount, minProfit)
+    Contract->>Aave: flashLoan(WETH, amount)
+    Aave->>Contract: transfer WETH (borrowed)
+    Contract->>BuyDEX: swap WETH → USDC (buy quote asset)
+    BuyDEX-->>Contract: USDC received
+    Contract->>SellDEX: swap USDC → WETH (sell quote asset)
+    SellDEX-->>Contract: WETH received (more than borrowed)
+    Contract->>Aave: repay WETH + 0.09% fee
+    Contract->>Bot: emit ProfitRealized(profit)
+    Note over Bot: Net = profit - gas cost
 ```
-1. SCAN:      Fetch quotes from all DEXes on all chains
-                 |
-2. FILTER:    Remove same-DEX, cross-chain, low-liq, outlier quotes
-                 |
-3. PRICE:     Calculate full cost waterfall for each surviving pair
-                 |
-4. SCORE:     Composite score = 50% profit + 25% liquidity + 15% safety + 10% spread
-                 |
-5. QUEUE:     Push to bounded priority queue (evict lowest if full)
-                 |
-6. RISK:      8-rule sequential check (any failure = hard reject)
-                 |
-7. CIRCUIT:   Check breaker state (OPEN = block, HALF_OPEN = probe)
-                 |
-8. SIMULATE:  Free eth_call dry-run (catches reverts before real gas)
-                 |
-9. SUBMIT:    Sign tx, send via Flashbots (ETH) or public mempool (L2)
-                 |
-10. VERIFY:   Check inclusion, extract profit, reconcile vs expected
+
+---
+
+## 14. End-to-End Decision Flow
+
+```mermaid
+flowchart TD
+    S1["1. SCAN<br/>Fetch quotes from<br/>all DEXes on all chains"]
+    S2["2. FILTER<br/>Remove same-DEX, cross-chain,<br/>low-liq, outlier quotes"]
+    S3["3. PRICE<br/>Full cost waterfall<br/>for each surviving pair"]
+    S4["4. SCORE<br/>50% profit + 25% liquidity<br/>+ 15% safety + 10% spread"]
+    S5["5. QUEUE<br/>Push to bounded priority queue<br/>(evict lowest if full)"]
+    S6["6. RISK<br/>8-rule sequential check<br/>(any failure = hard reject)"]
+    S7["7. CIRCUIT BREAKER<br/>Check state: OPEN = block,<br/>HALF_OPEN = probe"]
+    S8["8. SIMULATE<br/>Free eth_call dry-run<br/>(catches reverts before gas)"]
+    S9["9. SUBMIT<br/>Sign tx, send via Flashbots<br/>(ETH) or public mempool (L2)"]
+    S10["10. VERIFY<br/>Check inclusion, extract profit,<br/>reconcile vs expected"]
+
+    S1 --> S2 --> S3 --> S4 --> S5
+    S5 --> S6
+    S6 -->|pass| S7
+    S6 -->|fail| R1[REJECTED]
+    S7 -->|CLOSED| S8
+    S7 -->|OPEN| R2[BLOCKED]
+    S8 -->|pass| S9
+    S8 -->|revert| R3[ABORTED]
+    S9 --> S10
+    S10 --> DONE["INCLUDED / REVERTED / NOT_INCLUDED"]
+
+    style R1 fill:#e23b4a,color:#fff
+    style R2 fill:#e23b4a,color:#fff
+    style R3 fill:#e23b4a,color:#fff
+    style DONE fill:#00a87e,color:#fff
 ```
 
 At every numbered step, a negative outcome stops the pipeline for that
 opportunity.  The philosophy is **capital preservation > profit** — missing a
 trade is always better than losing money.
+
+---
+
+## 15. Database Schema (key tables)
+
+```mermaid
+erDiagram
+    opportunities ||--o| pricing_results : "has pricing"
+    opportunities ||--o| risk_decisions : "has risk verdict"
+    opportunities ||--o| simulations : "has simulation"
+    opportunities ||--o| execution_attempts : "has execution"
+    execution_attempts ||--o| trade_results : "has on-chain result"
+    pairs ||--o{ pools : "has pools"
+
+    opportunities {
+        string opportunity_id PK
+        string pair
+        string chain
+        string buy_dex
+        string sell_dex
+        string spread_bps
+        string status
+        string detected_at
+    }
+    pricing_results {
+        int pricing_id PK
+        string opportunity_id FK
+        string expected_net_profit
+        string fee_cost
+        string slippage_cost
+        string gas_estimate
+    }
+    risk_decisions {
+        int risk_id PK
+        string opportunity_id FK
+        bool approved
+        string reason_code
+        json threshold_snapshot
+    }
+    trade_results {
+        int result_id PK
+        int execution_id FK
+        bool included
+        bool reverted
+        int gas_used
+        string actual_net_profit
+        string realized_profit_quote
+    }
+```
