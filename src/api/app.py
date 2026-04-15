@@ -387,7 +387,7 @@ def create_app(
     @app.get("/opportunity/{opp_id}", response_class=HTMLResponse)
     def opportunity_detail_page(opp_id: str):
         """HTML detail page for a single opportunity."""
-        from api.dashboard import OPPORTUNITY_DETAIL_HTML
+        from dashboards.opportunity_detail import OPPORTUNITY_DETAIL_HTML
         return HTMLResponse(
             content=OPPORTUNITY_DETAIL_HTML,
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
@@ -530,7 +530,7 @@ def create_app(
 
     @app.get("/dashboard", response_class=HTMLResponse)
     def dashboard():
-        from api.dashboard import DASHBOARD_HTML
+        from dashboards.main_dashboard import DASHBOARD_HTML
         return HTMLResponse(
             content=DASHBOARD_HTML,
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
@@ -538,7 +538,7 @@ def create_app(
 
     @app.get("/ops", response_class=HTMLResponse)
     def ops_dashboard():
-        from api.dashboard import OPS_DASHBOARD_HTML
+        from dashboards.ops_dashboard import OPS_DASHBOARD_HTML
         return HTMLResponse(
             content=OPS_DASHBOARD_HTML,
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
@@ -546,7 +546,7 @@ def create_app(
 
     @app.get("/analytics", response_class=HTMLResponse)
     def analytics_dashboard():
-        from api.dashboard import ANALYTICS_HTML
+        from dashboards.analytics_dashboard import ANALYTICS_HTML
         return HTMLResponse(
             content=ANALYTICS_HTML,
             headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
