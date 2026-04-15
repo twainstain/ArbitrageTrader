@@ -121,6 +121,9 @@ class BotConfig:
     # Per-chain execution mode: {"arbitrum": "live", "optimism": "simulated"}.
     # Chains not listed fall back to the global execution_enabled flag.
     chain_execution_mode: dict | None = None
+    # Per-chain gas cost overrides: {"ethereum": 0.005, "arbitrum": 0.0002}.
+    # Chains not listed use estimated_gas_cost_base as default.
+    chain_gas_cost: dict | None = None
 
     def __post_init__(self) -> None:
         for attr in ("trade_size", "min_profit_base", "estimated_gas_cost_base",
@@ -179,9 +182,16 @@ class BotConfig:
             dexes=dexes,
             extra_pairs=extra_pairs,
             chain_execution_mode=data.get("chain_execution_mode"),
+            chain_gas_cost=data.get("chain_gas_cost"),
         )
         config.validate()
         return config
+
+    def gas_cost_for_chain(self, chain: str) -> Decimal:
+        """Return estimated gas cost for a chain, falling back to the global default."""
+        if self.chain_gas_cost and chain in self.chain_gas_cost:
+            return D(str(self.chain_gas_cost[chain]))
+        return self.estimated_gas_cost_base
 
     def validate(self) -> None:
         """Raise ValueError if any config field is out of acceptable range."""

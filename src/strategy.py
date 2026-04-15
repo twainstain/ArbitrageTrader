@@ -135,6 +135,13 @@ class ArbitrageStrategy:
         buy_cost_quote = trade_size * buy_quote.buy_price
         sell_proceeds_quote = trade_size * sell_quote.sell_price
 
+        # Resolve chain early — needed for per-chain gas cost.
+        chain = ""
+        for dex_cfg in self.config.dexes:
+            if dex_cfg.name == buy_quote.dex and dex_cfg.chain:
+                chain = dex_cfg.chain
+                break
+
         # --- Fee handling (critical: prevents double-counting) ---
         #
         # On-chain quoters (Uniswap V3 quoteExactInputSingle, etc.) return
@@ -193,7 +200,8 @@ class ArbitrageStrategy:
         # a data error), the $2500 midpoint introduces ~10% conversion error.
         # The scanner's 5% spread cap and outlier filter prevent this case.
         mid_price = (buy_quote.buy_price + sell_quote.sell_price) / D("2")
-        net_profit_base = (net_profit_quote / mid_price) - self.config.estimated_gas_cost_base
+        chain_gas = self.config.gas_cost_for_chain(chain)
+        net_profit_base = (net_profit_quote / mid_price) - chain_gas
 
         is_actionable = net_profit_base > self.config.min_profit_base
         if not is_actionable:
@@ -269,13 +277,6 @@ class ArbitrageStrategy:
             # No liquidity data available — default to 1.0 (no penalty).
             liquidity_score = 1.0
 
-        # Resolve chain from DEX config.
-        chain = ""
-        for dex_cfg in self.config.dexes:
-            if dex_cfg.name == buy_quote.dex and dex_cfg.chain:
-                chain = dex_cfg.chain
-                break
-
         return Opportunity(
             pair=buy_quote.pair,
             buy_dex=buy_quote.dex,
@@ -290,7 +291,7 @@ class ArbitrageStrategy:
             dex_fee_cost_quote=dex_fee_cost_quote,
             flash_loan_fee_quote=flash_fee_quote,
             slippage_cost_quote=slippage_cost_quote,
-            gas_cost_base=self.config.estimated_gas_cost_base,
+            gas_cost_base=chain_gas,
             is_actionable=is_actionable,
             warning_flags=tuple(flags),
             liquidity_score=liquidity_score,

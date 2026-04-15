@@ -337,5 +337,95 @@ class DynamicSlippageTests(unittest.TestCase):
         self.assertAlmostEqual(float(opp.slippage_cost_quote), 4.5015, delta=0.001)
 
 
+class PerChainGasCostTests(unittest.TestCase):
+    """Tests for per-chain gas cost in strategy."""
+
+    def _make_config(self, chain_gas_cost=None) -> BotConfig:
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.0, estimated_gas_cost_base=0.001,
+            flash_loan_fee_bps=0.0, flash_loan_provider="aave_v3",
+            slippage_bps=0.0, poll_interval_seconds=0.0,
+            chain_gas_cost=chain_gas_cost,
+            dexes=[
+                DexConfig(name="Uni-Eth", base_price=3000.0, fee_bps=0.0,
+                          volatility_bps=0.0, chain="ethereum", dex_type="uniswap_v3"),
+                DexConfig(name="Sushi-Eth", base_price=3050.0, fee_bps=0.0,
+                          volatility_bps=0.0, chain="ethereum", dex_type="sushi_v3"),
+                DexConfig(name="Uni-Arb", base_price=3000.0, fee_bps=0.0,
+                          volatility_bps=0.0, chain="arbitrum", dex_type="uniswap_v3"),
+                DexConfig(name="Sushi-Arb", base_price=3050.0, fee_bps=0.0,
+                          volatility_bps=0.0, chain="arbitrum", dex_type="sushi_v3"),
+            ],
+        )
+        config.validate()
+        return config
+
+    def test_gas_cost_for_chain_with_override(self):
+        config = self._make_config(chain_gas_cost={"ethereum": 0.005, "arbitrum": 0.0002})
+        self.assertEqual(float(config.gas_cost_for_chain("ethereum")), 0.005)
+        self.assertEqual(float(config.gas_cost_for_chain("arbitrum")), 0.0002)
+
+    def test_gas_cost_for_chain_fallback(self):
+        config = self._make_config(chain_gas_cost={"ethereum": 0.005})
+        # arbitrum not in overrides → falls back to estimated_gas_cost_base
+        self.assertEqual(float(config.gas_cost_for_chain("arbitrum")), 0.001)
+
+    def test_gas_cost_for_chain_no_overrides(self):
+        config = self._make_config(chain_gas_cost=None)
+        self.assertEqual(float(config.gas_cost_for_chain("ethereum")), 0.001)
+
+    def test_ethereum_higher_gas_reduces_profit(self):
+        """Ethereum with 0.005 gas should have lower net profit than Arbitrum with 0.0002."""
+        config = self._make_config(chain_gas_cost={"ethereum": 0.005, "arbitrum": 0.0002})
+        strategy = ArbitrageStrategy(config)
+
+        eth_quotes = [
+            MarketQuote(dex="Uni-Eth", pair="WETH/USDC", buy_price=3000.0, sell_price=2999.0, fee_bps=0.0),
+            MarketQuote(dex="Sushi-Eth", pair="WETH/USDC", buy_price=3050.0, sell_price=3049.0, fee_bps=0.0),
+        ]
+        arb_quotes = [
+            MarketQuote(dex="Uni-Arb", pair="WETH/USDC", buy_price=3000.0, sell_price=2999.0, fee_bps=0.0),
+            MarketQuote(dex="Sushi-Arb", pair="WETH/USDC", buy_price=3050.0, sell_price=3049.0, fee_bps=0.0),
+        ]
+
+        opp_eth = strategy.find_best_opportunity(eth_quotes)
+        opp_arb = strategy.find_best_opportunity(arb_quotes)
+        assert opp_eth is not None and opp_arb is not None
+
+        # Same spread, but Ethereum has 25x higher gas
+        self.assertGreater(opp_arb.net_profit_base, opp_eth.net_profit_base)
+        self.assertAlmostEqual(float(opp_eth.gas_cost_base), 0.005, places=4)
+        self.assertAlmostEqual(float(opp_arb.gas_cost_base), 0.0002, places=4)
+
+    def test_high_gas_can_make_opportunity_unprofitable(self):
+        """Ethereum gas of 0.02 ETH should make a small spread unprofitable."""
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.001, estimated_gas_cost_base=0.001,
+            flash_loan_fee_bps=0.0, flash_loan_provider="aave_v3",
+            slippage_bps=0.0, poll_interval_seconds=0.0,
+            chain_gas_cost={"ethereum": 0.02},
+            dexes=[
+                DexConfig(name="Uni-Eth", base_price=3000.0, fee_bps=0.0,
+                          volatility_bps=0.0, chain="ethereum", dex_type="uniswap_v3"),
+                DexConfig(name="Sushi-Eth", base_price=3020.0, fee_bps=0.0,
+                          volatility_bps=0.0, chain="ethereum", dex_type="sushi_v3"),
+            ],
+        )
+        config.validate()
+        strategy = ArbitrageStrategy(config)
+
+        quotes = [
+            MarketQuote(dex="Uni-Eth", pair="WETH/USDC", buy_price=3000.0, sell_price=2999.0, fee_bps=0.0),
+            MarketQuote(dex="Sushi-Eth", pair="WETH/USDC", buy_price=3020.0, sell_price=3019.0, fee_bps=0.0),
+        ]
+        opp = strategy.find_best_opportunity(quotes)
+        # $20 spread / $3010 mid ≈ 0.0066 ETH gross profit - 0.02 gas = negative
+        # Strategy should filter this as not actionable
+        if opp is not None:
+            self.assertFalse(opp.is_actionable)
+
+
 if __name__ == "__main__":
     unittest.main()
