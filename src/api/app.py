@@ -606,7 +606,8 @@ def create_app(
 
         rpc_overrides = get_rpc_overrides()
         balances = {}
-        for chain in ["arbitrum", "ethereum", "base", "optimism"]:
+        from observability.wallet import CHAINS
+        for chain in CHAINS:
             rpc_url = rpc_overrides.get(chain, PUBLIC_RPC_URLS.get(chain, ""))
             if not rpc_url:
                 continue

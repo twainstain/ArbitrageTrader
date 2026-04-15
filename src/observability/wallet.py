@@ -7,7 +7,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-CHAINS = ["arbitrum", "ethereum", "base"]
+CHAINS = ["arbitrum", "ethereum", "base", "optimism"]
 
 
 def get_wallet_balances() -> dict:
