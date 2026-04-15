@@ -65,8 +65,10 @@ def get_windowed_stats(conn: DbConnection, window_key: str, chain: str | None = 
         trade_row = conn.execute(
             "SELECT "
             "  COUNT(*) as total_trades, "
-            "  SUM(CASE WHEN tr.included = 1 AND tr.reverted = 0 THEN 1 ELSE 0 END) as successful, "
-            "  SUM(CASE WHEN tr.reverted = 1 THEN 1 ELSE 0 END) as reverted, "
+            "  COALESCE(SUM(CASE WHEN tr.included = 1 AND tr.reverted = 0 THEN 1 ELSE 0 END), 0) as successful, "
+            "  COALESCE(SUM(CASE WHEN tr.reverted = 1 THEN 1 ELSE 0 END), 0) as reverted, "
+            "  COALESCE(SUM(CAST(tr.realized_profit_quote AS REAL)), 0) as total_realized_profit_quote, "
+            "  COALESCE(SUM(CAST(tr.gas_cost_base AS REAL)), 0) as total_gas_cost_base, "
             "  COALESCE(SUM(CAST(tr.actual_net_profit AS REAL)), 0) as total_profit, "
             "  COALESCE(SUM(tr.gas_used), 0) as total_gas "
             "FROM trade_results tr "
@@ -79,8 +81,10 @@ def get_windowed_stats(conn: DbConnection, window_key: str, chain: str | None = 
         trade_row = conn.execute(
             "SELECT "
             "  COUNT(*) as total_trades, "
-            "  SUM(CASE WHEN tr.included = 1 AND tr.reverted = 0 THEN 1 ELSE 0 END) as successful, "
-            "  SUM(CASE WHEN tr.reverted = 1 THEN 1 ELSE 0 END) as reverted, "
+            "  COALESCE(SUM(CASE WHEN tr.included = 1 AND tr.reverted = 0 THEN 1 ELSE 0 END), 0) as successful, "
+            "  COALESCE(SUM(CASE WHEN tr.reverted = 1 THEN 1 ELSE 0 END), 0) as reverted, "
+            "  COALESCE(SUM(CAST(tr.realized_profit_quote AS REAL)), 0) as total_realized_profit_quote, "
+            "  COALESCE(SUM(CAST(tr.gas_cost_base AS REAL)), 0) as total_gas_cost_base, "
             "  COALESCE(SUM(CAST(tr.actual_net_profit AS REAL)), 0) as total_profit, "
             "  COALESCE(SUM(tr.gas_used), 0) as total_gas "
             "FROM trade_results tr "
@@ -128,6 +132,88 @@ def get_windowed_stats(conn: DbConnection, window_key: str, chain: str | None = 
         "window": window_key,
         "chain": chain or "all",
         "since": since,
+        "opportunities": {
+            "total": total_opps,
+            "funnel": funnel,
+        },
+        "trades": trades,
+        "profit": profit,
+    }
+
+
+def get_range_stats(conn: DbConnection, start: str, end: str | None = None,
+                    chain: str | None = None) -> dict:
+    """Get stats for a custom time range (ISO timestamps, UTC).
+
+    Args:
+        conn: Database connection.
+        start: ISO timestamp for range start.
+        end: ISO timestamp for range end. None = now.
+        chain: Optional chain filter.
+    """
+    if end is None:
+        end = datetime.now(timezone.utc).isoformat()
+
+    # Opportunity counts by status.
+    if chain:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) as cnt FROM opportunities "
+            "WHERE detected_at >= ? AND detected_at <= ? AND chain = ? GROUP BY status",
+            (start, end, chain),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) as cnt FROM opportunities "
+            "WHERE detected_at >= ? AND detected_at <= ? GROUP BY status",
+            (start, end),
+        ).fetchall()
+
+    funnel = {r["status"]: r["cnt"] for r in rows}
+    total_opps = sum(funnel.values())
+
+    # Trade results in range.
+    trade_cond = "WHERE o.detected_at >= ? AND o.detected_at <= ?"
+    trade_params: list = [start, end]
+    if chain:
+        trade_cond += " AND o.chain = ?"
+        trade_params.append(chain)
+
+    trade_row = conn.execute(
+        "SELECT "
+        "  COUNT(*) as total_trades, "
+        "  COALESCE(SUM(CASE WHEN tr.included = 1 AND tr.reverted = 0 THEN 1 ELSE 0 END), 0) as successful, "
+        "  COALESCE(SUM(CASE WHEN tr.reverted = 1 THEN 1 ELSE 0 END), 0) as reverted, "
+        "  COALESCE(SUM(CAST(tr.actual_net_profit AS REAL)), 0) as total_profit, "
+        "  COALESCE(SUM(tr.gas_used), 0) as total_gas "
+        "FROM trade_results tr "
+        "JOIN execution_attempts ea ON tr.execution_id = ea.execution_id "
+        "JOIN opportunities o ON ea.opportunity_id = o.opportunity_id "
+        + trade_cond,
+        tuple(trade_params),
+    ).fetchone()
+    trades = dict(trade_row) if trade_row else {}
+
+    # Expected profit.
+    profit_row = conn.execute(
+        "SELECT "
+        "  COUNT(*) as priced_count, "
+        "  COALESCE(SUM(CAST(pr.expected_net_profit AS REAL)), 0) as total_expected_profit, "
+        "  COALESCE(AVG(CAST(pr.expected_net_profit AS REAL)), 0) as avg_expected_profit, "
+        "  COALESCE(MAX(CAST(pr.expected_net_profit AS REAL)), 0) as max_expected_profit, "
+        "  COALESCE(MIN(CAST(pr.expected_net_profit AS REAL)), 0) as min_expected_profit "
+        "FROM pricing_results pr "
+        "JOIN opportunities o ON pr.opportunity_id = o.opportunity_id "
+        + trade_cond.replace("o.detected_at", "o.detected_at")
+        + " AND CAST(pr.expected_net_profit AS REAL) > 0",
+        tuple(trade_params),
+    ).fetchone()
+    profit = dict(profit_row) if profit_row else {}
+
+    return {
+        "window": "custom",
+        "start": start,
+        "end": end,
+        "chain": chain or "all",
         "opportunities": {
             "total": total_opps,
             "funnel": funnel,

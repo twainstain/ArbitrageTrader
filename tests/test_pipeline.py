@@ -13,6 +13,7 @@ from models import Opportunity
 from persistence.db import init_db, close_db
 from persistence.repository import Repository
 from pipeline.lifecycle import CandidatePipeline, PipelineResult
+from pipeline.verifier import VerificationResult
 from risk.policy import RiskPolicy
 
 D = Decimal
@@ -58,7 +59,12 @@ class _MockVerifier:
         self._profit = profit
 
     def verify(self, tx_hash):
-        return self._included, self._reverted, self._gas, self._profit
+        return VerificationResult(
+            included=self._included,
+            reverted=self._reverted,
+            gas_used=self._gas,
+            actual_profit_base=self._profit,
+        )
 
 
 class PipelineRejectionTests(unittest.TestCase):

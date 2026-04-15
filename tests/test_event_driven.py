@@ -18,6 +18,12 @@ from pipeline.lifecycle import CandidatePipeline
 from pipeline.queue import CandidateQueue
 from risk.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from risk.policy import RiskPolicy
+from run_event_driven import (
+    assess_launch_readiness,
+    build_execution_stack,
+    compute_live_execution_summary,
+    enforce_safe_execution_mode,
+)
 
 D = Decimal
 
@@ -359,6 +365,181 @@ class CrossChainFilterTests(unittest.TestCase):
 
         funnel = self.repo.get_opportunity_funnel()
         self.assertGreater(funnel.get("rejected", 0), 0)
+
+
+class LiveExecutionStackTests(unittest.TestCase):
+    @unittest.mock.patch.dict("os.environ", {}, clear=True)
+    def test_build_execution_stack_returns_none_without_env(self):
+        from config import BotConfig, DexConfig
+
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.001, estimated_gas_cost_base=0.002,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=15.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="Uniswap", base_price=0, fee_bps=30.0,
+                          volatility_bps=0, chain="ethereum", dex_type="uniswap_v3"),
+                DexConfig(name="Sushi", base_price=0, fee_bps=30.0,
+                          volatility_bps=0, chain="ethereum", dex_type="sushi_v3"),
+            ],
+        )
+        config.validate()
+
+        sim, sub, ver = build_execution_stack(config)
+        self.assertIsNone(sim)
+        self.assertIsNone(sub)
+        self.assertIsNone(ver)
+
+    @unittest.mock.patch("run_event_driven.ChainExecutorSubmitter")
+    @unittest.mock.patch("run_event_driven.OpportunityAwareVerifier")
+    @unittest.mock.patch("run_event_driven.ChainExecutorSimulator")
+    @unittest.mock.patch("chain_executor.ChainExecutor")
+    def test_build_execution_stack_returns_adapters_when_env_present(
+        self, mock_exec_cls, mock_sim_cls, mock_ver_cls, mock_sub_cls
+    ):
+        from config import BotConfig, DexConfig
+
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.001, estimated_gas_cost_base=0.002,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=15.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="Uniswap", base_price=0, fee_bps=30.0,
+                          volatility_bps=0, chain="ethereum", dex_type="uniswap_v3"),
+                DexConfig(name="Sushi", base_price=0, fee_bps=30.0,
+                          volatility_bps=0, chain="ethereum", dex_type="sushi_v3"),
+            ],
+        )
+        config.validate()
+
+        mock_exec = MagicMock()
+        mock_exec_cls.return_value = mock_exec
+        mock_sim = MagicMock()
+        mock_sim_cls.return_value = mock_sim
+        mock_ver = MagicMock()
+        mock_ver_cls.return_value = mock_ver
+        mock_sub = MagicMock()
+        mock_sub_cls.return_value = mock_sub
+
+        with unittest.mock.patch.dict("os.environ", {
+            "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+            "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
+        }):
+            sim, sub, ver = build_execution_stack(config)
+
+        self.assertIs(sim, mock_sim)
+        self.assertIs(sub, mock_sub)
+        self.assertIs(ver, mock_ver)
+
+    def test_compute_live_execution_summary_prefers_arbitrum_target(self):
+        from config import BotConfig, DexConfig
+
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.001, estimated_gas_cost_base=0.002,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=15.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="Uniswap-Arbitrum", base_price=0, fee_bps=30.0,
+                          volatility_bps=0, chain="arbitrum", dex_type="uniswap_v3"),
+                DexConfig(name="Sushi-Arbitrum", base_price=0, fee_bps=30.0,
+                          volatility_bps=0, chain="arbitrum", dex_type="sushi_v3"),
+                DexConfig(name="Velodrome-Optimism", base_price=0, fee_bps=20.0,
+                          volatility_bps=0, chain="optimism", dex_type="velodrome_v2"),
+            ],
+        )
+        config.validate()
+
+        summary = compute_live_execution_summary(config)
+        self.assertEqual(summary["rollout_target"], "arbitrum")
+        self.assertIn("arbitrum", summary["executable_chains"])
+        self.assertIn("Uniswap-Arbitrum", summary["executable_dex_names"])
+        self.assertIn("Sushi-Arbitrum", summary["executable_dex_names"])
+
+    @unittest.mock.patch.dict("os.environ", {
+        "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+        "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
+        "RPC_ARBITRUM": "https://arb.example",
+    }, clear=True)
+    def test_assess_launch_readiness_ready_for_arbitrum_only_supported_config(self):
+        from config import BotConfig, DexConfig
+
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.001, estimated_gas_cost_base=0.002,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=15.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="Uniswap-Arbitrum", base_price=0, fee_bps=30.0,
+                          volatility_bps=0, chain="arbitrum", dex_type="uniswap_v3"),
+                DexConfig(name="Sushi-Arbitrum", base_price=0, fee_bps=30.0,
+                          volatility_bps=0, chain="arbitrum", dex_type="sushi_v3"),
+            ],
+        )
+        config.validate()
+
+        readiness = assess_launch_readiness(config, live_stack_ready=True, target_chain="arbitrum")
+        self.assertTrue(readiness["launch_ready"])
+        self.assertEqual(readiness["launch_blockers"], [])
+        self.assertTrue(readiness["executor_key_configured"])
+        self.assertTrue(readiness["executor_contract_configured"])
+        self.assertTrue(readiness["rpc_configured"])
+
+    @unittest.mock.patch.dict("os.environ", {}, clear=True)
+    def test_assess_launch_readiness_flags_off_target_and_missing_env(self):
+        from config import BotConfig, DexConfig, PairConfig
+
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.001, estimated_gas_cost_base=0.002,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=15.0, poll_interval_seconds=0.0,
+            extra_pairs=[
+                PairConfig(
+                    pair="WETH/USDT",
+                    base_asset="WETH",
+                    quote_asset="USDT",
+                    trade_size=1.0,
+                    chain="base",
+                )
+            ],
+            dexes=[
+                DexConfig(name="Uniswap-Arbitrum", base_price=0, fee_bps=30.0,
+                          volatility_bps=0, chain="arbitrum", dex_type="uniswap_v3"),
+                DexConfig(name="Velodrome-Optimism", base_price=0, fee_bps=20.0,
+                          volatility_bps=0, chain="optimism", dex_type="velodrome_v2"),
+            ],
+        )
+        config.validate()
+
+        readiness = assess_launch_readiness(config, live_stack_ready=False, target_chain="arbitrum")
+        self.assertFalse(readiness["launch_ready"])
+        self.assertIn("off_target_dexes:Velodrome-Optimism", readiness["launch_blockers"])
+        self.assertIn("off_target_pairs:WETH/USDT", readiness["launch_blockers"])
+        self.assertIn("missing_executor_private_key", readiness["launch_blockers"])
+        self.assertIn("missing_executor_contract", readiness["launch_blockers"])
+        self.assertIn("missing_rpc_arbitrum", readiness["launch_blockers"])
+        self.assertIn("live_stack_unavailable", readiness["launch_blockers"])
+
+    def test_enforce_safe_execution_mode_disables_when_not_ready(self):
+        policy = RiskPolicy(execution_enabled=True)
+        active = enforce_safe_execution_mode(
+            policy,
+            {"launch_ready": False, "launch_blockers": ["missing_executor_contract"]},
+        )
+        self.assertFalse(active)
+        self.assertFalse(policy.execution_enabled)
+
+    def test_enforce_safe_execution_mode_keeps_enabled_when_ready(self):
+        policy = RiskPolicy(execution_enabled=True)
+        active = enforce_safe_execution_mode(
+            policy,
+            {"launch_ready": True, "launch_blockers": []},
+        )
+        self.assertTrue(active)
+        self.assertTrue(policy.execution_enabled)
 
 
 if __name__ == "__main__":

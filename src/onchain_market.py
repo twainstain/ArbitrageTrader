@@ -1088,14 +1088,17 @@ class OnChainMarket:
             router, amount_in, base, quote, factory,
         )
 
-        # Fallback: try bridged USDC if native returned zero.
-        if best_out == 0 and quote_symbol.upper() in ("USDC", "USDT"):
+        # Also try bridged USDC and pick the better result.
+        # Native USDC pools on Optimism are often thin; USDC.e has deeper liquidity.
+        if quote_symbol.upper() in ("USDC", "USDT"):
             from tokens import bridged_usdc_address
             bridged = bridged_usdc_address(chain)
             if bridged and bridged.lower() != quote.lower():
-                best_out, best_stable = self._velo_best_route(
+                bridged_out, bridged_stable = self._velo_best_route(
                     router, amount_in, base, bridged, factory,
                 )
+                if bridged_out > best_out:
+                    best_out, best_stable = bridged_out, bridged_stable
 
         dex_label = "Aerodrome" if dex_type == "aerodrome" else "Velodrome"
         if best_out == 0:

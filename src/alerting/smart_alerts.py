@@ -1,8 +1,9 @@
-"""Smart alerting rules — Telegram/Discord for big wins, hourly email summary.
+"""Smart alerting rules — Telegram/Discord for big wins, hourly + daily email summaries.
 
 Rules:
   - Spread > 5%: Immediate Telegram + Discord alert (big wins only)
   - Every hour: Email-only aggregate report with dashboard link
+  - Every 24h: Email-only daily summary with full stats
 """
 
 from __future__ import annotations
@@ -22,12 +23,210 @@ logger = logging.getLogger(__name__)
 D = Decimal
 BIG_WIN_THRESHOLD_PCT = D("5")
 
+# Intervals in seconds.
+HOURLY_INTERVAL = 3600.0
+DAILY_INTERVAL = 86400.0
+
+# ── HTML color helpers ────────────────────────────────────────────────
+
+_GREEN = "#22c55e"
+_RED = "#ef4444"
+_YELLOW = "#eab308"
+_GRAY = "#9ca3af"
+_WHITE = "#ffffff"
+_DARK_BG = "#1e1e2e"
+_CARD_BG = "#2a2a3e"
+_BORDER = "#3a3a5e"
+
+
+def _clr(val: float | int | str | None, positive_good: bool = True) -> str:
+    """Return a color hex for a numeric value."""
+    if val is None:
+        return _GRAY
+    try:
+        v = float(val)
+    except (ValueError, TypeError):
+        return _WHITE
+    if v > 0:
+        return _GREEN if positive_good else _RED
+    if v < 0:
+        return _RED if positive_good else _GREEN
+    return _GRAY
+
+
+def _colored(val: str, color: str) -> str:
+    return f'<span style="color:{color};font-weight:bold">{val}</span>'
+
+
+def _row(label: str, value: str, color: str = _WHITE, indent: int = 0) -> str:
+    pad = "&nbsp;" * (indent * 4)
+    return (
+        f'<tr>'
+        f'<td style="padding:4px 12px;color:{_GRAY};white-space:nowrap">{pad}{label}</td>'
+        f'<td style="padding:4px 12px;color:{color};font-weight:bold;text-align:right;word-break:break-all">{value}</td>'
+        f'</tr>'
+    )
+
+
+def _section_header(title: str) -> str:
+    return (
+        f'<tr><td colspan="2" style="padding:12px 12px 4px;font-size:14px;'
+        f'font-weight:bold;color:{_WHITE};border-bottom:1px solid {_BORDER}">'
+        f'{title}</td></tr>'
+    )
+
+
+def _html_wrapper(title: str, body: str, dashboard_url: str) -> str:
+    return f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background:{_DARK_BG};font-family:-apple-system,BlinkMacSystemFont,'SF Mono',monospace,monospace;-webkit-text-size-adjust:100%">
+<div style="max-width:600px;margin:12px auto;background:{_CARD_BG};border-radius:8px;border:1px solid {_BORDER};overflow:hidden">
+  <div style="background:{_BORDER};padding:14px 16px">
+    <h2 style="margin:0;color:{_WHITE};font-size:15px">{title}</h2>
+  </div>
+  <table style="width:100%;border-collapse:collapse;font-size:13px" cellpadding="0" cellspacing="0">
+    {body}
+  </table>
+  <div style="padding:14px 16px;text-align:center;border-top:1px solid {_BORDER}">
+    <a href="{dashboard_url}" style="color:#60a5fa;text-decoration:none;font-size:14px;font-weight:bold;display:inline-block;padding:8px 24px;background:#1f6feb;border-radius:6px;color:#ffffff">Open Dashboard</a>
+  </div>
+</div>
+</body>
+</html>"""
+
+
+# ── Wallet helper ─────────────────────────────────────────────────────
+
+def _format_eth(value: float | None) -> str:
+    if value is None:
+        return "error"
+    return f"{value:.6f} ETH"
+
+
+def _fetch_wallet_data() -> dict:
+    """Return wallet data dict: {address, balances}."""
+    try:
+        from observability.wallet import get_wallet_balances
+        return get_wallet_balances()
+    except Exception as exc:
+        logger.debug("Wallet balance fetch failed: %s", exc)
+        return {"address": "", "balances": {}}
+
+
+def _wallet_plain(wb: dict) -> str:
+    if not wb["address"]:
+        return "  (wallet not configured)\n"
+    lines = [f"  Address: {wb['address']}"]
+    total = 0.0
+    for chain, bal in wb["balances"].items():
+        lines.append(f"  {chain:>12}: {_format_eth(bal)}")
+        if bal is not None:
+            total += bal
+    lines.append(f"  {'total':>12}: {_format_eth(total)}")
+    return "\n".join(lines) + "\n"
+
+
+def _wallet_html(wb: dict) -> str:
+    if not wb["address"]:
+        return _row("Wallet", "not configured", _GRAY)
+    rows = _row("Address", wb["address"][:10] + "..." + wb["address"][-6:], _WHITE)
+    total = 0.0
+    for chain, bal in wb["balances"].items():
+        bal_str = _format_eth(bal)
+        color = _GREEN if bal is not None and bal > 0.005 else (_YELLOW if bal is not None else _RED)
+        rows += _row(chain.capitalize(), bal_str, color, indent=1)
+        if bal is not None:
+            total += bal
+    total_color = _GREEN if total > 0.01 else (_YELLOW if total > 0 else _RED)
+    rows += _row("Total", _format_eth(total), total_color, indent=1)
+    return rows
+
+
+# ── Chain stats helper ────────────────────────────────────────────────
+
+def _chain_plain(chain_stats: dict[str, dict]) -> str:
+    if not chain_stats:
+        return "  (no chain data)\n"
+    lines = []
+    for chain, stats in sorted(chain_stats.items(), key=lambda x: x[1]["total"], reverse=True):
+        total = stats["total"]
+        rejected = stats.get("rejected", 0)
+        approved = stats.get("approved", 0) + stats.get("simulation_approved", 0)
+        included = stats.get("included", 0)
+        lines.append(f"  {chain:>12}: {total} detected, {approved} actionable, {included} included, {rejected} rejected")
+    return "\n".join(lines) + "\n"
+
+
+def _chain_html(chain_stats: dict[str, dict]) -> str:
+    if not chain_stats:
+        return _row("Chains", "no data", _GRAY)
+    rows = ""
+    for chain, stats in sorted(chain_stats.items(), key=lambda x: x[1]["total"], reverse=True):
+        total = stats["total"]
+        rejected = stats.get("rejected", 0)
+        approved = stats.get("approved", 0) + stats.get("simulation_approved", 0)
+        included = stats.get("included", 0)
+        summary = (
+            f'{_colored(str(total), _WHITE)} det | '
+            f'{_colored(str(approved), _GREEN)} act | '
+            f'{_colored(str(included), _GREEN if included else _GRAY)} inc | '
+            f'{_colored(str(rejected), _RED if rejected else _GRAY)} rej'
+        )
+        rows += f'<tr><td style="padding:4px 12px;color:{_GRAY}">&nbsp;&nbsp;&nbsp;&nbsp;{chain}</td><td style="padding:4px 12px;text-align:right">{summary}</td></tr>'
+    return rows
+
+
+# ── Execution stats helper ────────────────────────────────────────────
+
+def _exec_plain(exec_stats: dict) -> str:
+    if not exec_stats or exec_stats.get("total_trades", 0) == 0:
+        return "  No executed trades\n"
+    lines = [
+        f"  Trades:       {exec_stats.get('total_trades', 0)}",
+        f"  Successful:   {exec_stats.get('successful', 0)}",
+        f"  Reverted:     {exec_stats.get('reverted', 0)}",
+        f"  Not included: {exec_stats.get('not_included', 0)}",
+        f"  Net profit:   {exec_stats.get('total_profit', 0):.6f}",
+        f"  Gas cost:     {exec_stats.get('total_gas_cost', 0):.6f}",
+        f"  Gas used:     {exec_stats.get('total_gas_used', 0):,}",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def _exec_html(exec_stats: dict) -> str:
+    if not exec_stats or exec_stats.get("total_trades", 0) == 0:
+        return _row("Trades", "none", _GRAY)
+    rows = ""
+    rows += _row("Trades", str(exec_stats.get("total_trades", 0)), _WHITE)
+    successful = exec_stats.get("successful", 0) or 0
+    reverted = exec_stats.get("reverted", 0) or 0
+    not_included = exec_stats.get("not_included", 0) or 0
+    rows += _row("Successful", str(successful), _GREEN if successful else _GRAY, indent=1)
+    rows += _row("Reverted", str(reverted), _RED if reverted else _GRAY, indent=1)
+    rows += _row("Not included", str(not_included), _YELLOW if not_included else _GRAY, indent=1)
+    profit = exec_stats.get("total_profit", 0) or 0
+    gas_cost = exec_stats.get("total_gas_cost", 0) or 0
+    rows += _row("Net profit", f"{profit:.6f}", _clr(profit), indent=1)
+    rows += _row("Gas cost", f"{gas_cost:.6f}", _RED if gas_cost > 0 else _GRAY, indent=1)
+    gas_used = exec_stats.get("total_gas_used", 0) or 0
+    rows += _row("Gas used", f"{gas_used:,}", _WHITE, indent=1)
+    return rows
+
+
+# ══════════════════════════════════════════════════════════════════════
+# SmartAlerter
+# ══════════════════════════════════════════════════════════════════════
 
 class SmartAlerter:
     """Applies alerting rules on top of the dispatcher.
 
     - Telegram + Discord: immediate alert for spreads > 5%
-    - Gmail + Discord: hourly aggregate report
+    - Gmail: hourly aggregate report
+    - Gmail: daily comprehensive summary
     """
 
     def __init__(
@@ -37,7 +236,8 @@ class SmartAlerter:
         discord: DiscordAlert | None = None,
         gmail: GmailAlert | None = None,
         dashboard_url: str = "http://localhost:8000/dashboard",
-        email_interval_seconds: float = 3600.0,
+        email_interval_seconds: float = HOURLY_INTERVAL,
+        daily_interval_seconds: float = DAILY_INTERVAL,
     ) -> None:
         self.repo = repo
         self.telegram = telegram or TelegramAlert()
@@ -45,9 +245,11 @@ class SmartAlerter:
         self.gmail = gmail or GmailAlert()
         self.dashboard_url = dashboard_url
         self.email_interval = email_interval_seconds
-        # Send first report 5 minutes after startup (not a full hour).
-        # Prevents restarts from indefinitely delaying the first email.
+        self.daily_interval = daily_interval_seconds
+        # Send first hourly report 5 minutes after startup.
         self._last_email_at: float = time.time() - email_interval_seconds + 300
+        # Send first daily report 10 minutes after startup.
+        self._last_daily_at: float = time.time() - daily_interval_seconds + 600
         self._hourly_thread: Thread | None = None
         self._running = False
 
@@ -82,8 +284,12 @@ class SmartAlerter:
             self.discord.send("opportunity_found", msg, details)
             logger.info("Discord alert sent for %.2f%% spread on %s", float(spread_pct), pair)
 
+    # ------------------------------------------------------------------
+    # Hourly report
+    # ------------------------------------------------------------------
+
     def send_hourly_report(self) -> None:
-        """Send an hourly aggregate report via email only (not Discord)."""
+        """Send an hourly aggregate report via email."""
         from datetime import datetime, timedelta, timezone
         now = datetime.now(timezone.utc)
         since = (now - timedelta(hours=1)).isoformat()
@@ -95,22 +301,20 @@ class SmartAlerter:
         dry_run = self.repo.count_opportunities_since(since, status="dry_run")
         included = self.repo.count_opportunities_since(since, status="included")
 
-        funnel = self.repo.get_opportunity_funnel()
         pnl = self.repo.get_pnl_summary()
+        exec_stats = self.repo.get_execution_stats(since)
+        chain_stats = self.repo.get_chain_opportunity_stats(since)
+        wb = _fetch_wallet_data()
 
-        # Format funnel as readable lines instead of raw dict.
-        funnel_lines = "\n".join(
-            f"  {status}: {count}" for status, count in funnel.items()
-        ) if isinstance(funnel, dict) else f"  {funnel}"
-
-        # Actionable = sim_approved + approved + included (not rejected).
         actionable_hour = sim_approved + approved + included
         actionable_pct = f" ({actionable_hour * 100 // total}%)" if total > 0 else ""
 
-        msg = (
+        # ── Plain text ──
+        plain = (
             f"Hourly Arbitrage Report — {now.strftime('%Y-%m-%d %H:%M UTC')}\n"
-            f"{'='*50}\n\n"
-            f"Last Hour:\n"
+            f"{'='*55}\n\n"
+            f"WALLET:\n{_wallet_plain(wb)}\n"
+            f"LAST HOUR:\n"
             f"  Detected:            {total}\n"
             f"  Actionable:          {actionable_hour}{actionable_pct}\n"
             f"    Sim approved:      {sim_approved}\n"
@@ -118,30 +322,60 @@ class SmartAlerter:
             f"    Included on-chain: {included}\n"
             f"  Rejected:            {rejected}\n"
             f"  Dry-run:             {dry_run}\n\n"
-            f"All Time:\n"
-            f"{funnel_lines}\n\n"
-            f"PnL:\n"
+            f"EXECUTION (last hour):\n{_exec_plain(exec_stats)}\n"
+            f"PER CHAIN (last hour):\n{_chain_plain(chain_stats)}\n"
+            f"PNL (all time):\n"
             f"  Total profit: {pnl.get('total_profit', 0)}\n"
-            f"  Successful:   {pnl.get('successful', 'n/a')}\n"
-            f"  Reverted:     {pnl.get('reverted', 'n/a')}\n\n"
+            f"  Successful:   {pnl.get('successful', 0)}\n"
+            f"  Reverted:     {pnl.get('reverted', 0)}\n\n"
             f"Dashboard: {self.dashboard_url}\n"
         )
 
+        # ── HTML ──
+        title = f"Hourly Report — {now.strftime('%Y-%m-%d %H:%M UTC')}"
+        body = _section_header("Wallet")
+        body += _wallet_html(wb)
+
+        body += _section_header("Last Hour — Opportunities")
+        body += _row("Detected", str(total), _WHITE)
+        body += _row("Actionable", f"{actionable_hour}{actionable_pct}", _GREEN if actionable_hour else _GRAY)
+        body += _row("Sim approved", str(sim_approved), _GREEN if sim_approved else _GRAY, indent=1)
+        body += _row("Approved (live)", str(approved), _GREEN if approved else _GRAY, indent=1)
+        body += _row("Included", str(included), _GREEN if included else _GRAY, indent=1)
+        body += _row("Rejected", str(rejected), _RED if rejected else _GRAY)
+        body += _row("Dry-run", str(dry_run), _YELLOW if dry_run else _GRAY)
+
+        body += _section_header("Last Hour — Execution")
+        body += _exec_html(exec_stats)
+
+        body += _section_header("Last Hour — Per Chain")
+        body += _chain_html(chain_stats)
+
+        total_profit = pnl.get("total_profit", 0) or 0
+        body += _section_header("PnL (all time)")
+        body += _row("Total profit", f"{total_profit:.6f}", _clr(total_profit))
+        body += _row("Successful", str(pnl.get("successful", 0)), _GREEN if pnl.get("successful") else _GRAY)
+        body += _row("Reverted", str(pnl.get("reverted", 0)), _RED if pnl.get("reverted") else _GRAY)
+
+        html = _html_wrapper(title, body, self.dashboard_url)
+
         details = {
-            "last_hour_total": total,
+            "last_hour_detected": total,
             "last_hour_actionable": actionable_hour,
-            "last_hour_sim_approved": sim_approved,
-            "last_hour_approved": approved,
             "last_hour_rejected": rejected,
+            "last_hour_included": included,
             "all_time_profit": str(pnl.get("total_profit", 0)),
             "dashboard": self.dashboard_url,
         }
 
         if self.gmail.configured:
-            self.gmail.send("daily_summary", msg, details)
-            logger.info("Hourly email report sent")
-
-        # Hourly summary goes to email only — Discord gets big-win alerts.
+            ok = self.gmail.send("hourly_summary", plain, details, html_body=html)
+            if ok:
+                logger.info("Hourly email report sent")
+            else:
+                logger.error("Hourly email report FAILED to send")
+        else:
+            logger.warning("Hourly report skipped — Gmail not configured")
 
         self._last_email_at = time.time()
 
@@ -150,8 +384,149 @@ class SmartAlerter:
         if time.time() - self._last_email_at >= self.email_interval:
             self.send_hourly_report()
 
+    # ------------------------------------------------------------------
+    # Daily report
+    # ------------------------------------------------------------------
+
+    def send_daily_report(self) -> None:
+        """Send a daily comprehensive summary via email."""
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        since_24h = (now - timedelta(hours=24)).isoformat()
+
+        # 24h opportunity counts.
+        total_24h = self.repo.count_opportunities_since(since_24h)
+        approved_24h = self.repo.count_opportunities_since(since_24h, status="approved")
+        rejected_24h = self.repo.count_opportunities_since(since_24h, status="rejected")
+        sim_approved_24h = self.repo.count_opportunities_since(since_24h, status="simulation_approved")
+        dry_run_24h = self.repo.count_opportunities_since(since_24h, status="dry_run")
+        included_24h = self.repo.count_opportunities_since(since_24h, status="included")
+        submitted_24h = self.repo.count_opportunities_since(since_24h, status="submitted")
+        reverted_24h = self.repo.count_opportunities_since(since_24h, status="reverted")
+
+        actionable_24h = sim_approved_24h + approved_24h + included_24h
+        actionable_pct = f" ({actionable_24h * 100 // total_24h}%)" if total_24h > 0 else ""
+
+        exec_stats_24h = self.repo.get_execution_stats(since_24h)
+        funnel = self.repo.get_opportunity_funnel()
+        pnl = self.repo.get_pnl_summary()
+        exec_stats_all = self.repo.get_execution_stats()
+        chain_stats = self.repo.get_chain_opportunity_stats(since_24h)
+        wb = _fetch_wallet_data()
+
+        funnel_lines = "\n".join(
+            f"  {s}: {c}" for s, c in funnel.items()
+        ) if isinstance(funnel, dict) else f"  {funnel}"
+
+        # ── Plain text ──
+        plain = (
+            f"Daily Arbitrage Summary — {now.strftime('%Y-%m-%d %H:%M UTC')}\n"
+            f"{'='*55}\n\n"
+            f"WALLET:\n{_wallet_plain(wb)}\n"
+            f"LAST 24 HOURS — OPPORTUNITIES:\n"
+            f"  Detected:            {total_24h}\n"
+            f"  Actionable:          {actionable_24h}{actionable_pct}\n"
+            f"    Sim approved:      {sim_approved_24h}\n"
+            f"    Approved (live):   {approved_24h}\n"
+            f"    Submitted:         {submitted_24h}\n"
+            f"    Included on-chain: {included_24h}\n"
+            f"    Reverted:          {reverted_24h}\n"
+            f"  Rejected:            {rejected_24h}\n"
+            f"  Dry-run:             {dry_run_24h}\n\n"
+            f"LAST 24 HOURS — EXECUTION:\n{_exec_plain(exec_stats_24h)}\n"
+            f"PER CHAIN (24h):\n{_chain_plain(chain_stats)}\n"
+            f"ALL TIME — FUNNEL:\n{funnel_lines}\n\n"
+            f"ALL TIME — PNL:\n"
+            f"  Total profit:       {pnl.get('total_profit', 0)}\n"
+            f"  Realized (quote):   {pnl.get('total_realized_profit_quote', 0)}\n"
+            f"  Gas cost (base):    {pnl.get('total_gas_cost_base', 0)}\n"
+            f"  Successful trades:  {pnl.get('successful', 0)}\n"
+            f"  Reverted trades:    {pnl.get('reverted', 0)}\n"
+            f"  Not included:       {pnl.get('not_included', 0)}\n\n"
+            f"ALL TIME — EXECUTION:\n{_exec_plain(exec_stats_all)}\n"
+            f"Dashboard: {self.dashboard_url}\n"
+        )
+
+        # ── HTML ──
+        title = f"Daily Summary — {now.strftime('%Y-%m-%d %H:%M UTC')}"
+        body = _section_header("Wallet")
+        body += _wallet_html(wb)
+
+        body += _section_header("Last 24h — Opportunities")
+        body += _row("Detected", str(total_24h), _WHITE)
+        body += _row("Actionable", f"{actionable_24h}{actionable_pct}", _GREEN if actionable_24h else _GRAY)
+        body += _row("Sim approved", str(sim_approved_24h), _GREEN if sim_approved_24h else _GRAY, indent=1)
+        body += _row("Approved (live)", str(approved_24h), _GREEN if approved_24h else _GRAY, indent=1)
+        body += _row("Submitted", str(submitted_24h), _YELLOW if submitted_24h else _GRAY, indent=1)
+        body += _row("Included", str(included_24h), _GREEN if included_24h else _GRAY, indent=1)
+        body += _row("Reverted", str(reverted_24h), _RED if reverted_24h else _GRAY, indent=1)
+        body += _row("Rejected", str(rejected_24h), _RED if rejected_24h else _GRAY)
+        body += _row("Dry-run", str(dry_run_24h), _YELLOW if dry_run_24h else _GRAY)
+
+        body += _section_header("Last 24h — Execution")
+        body += _exec_html(exec_stats_24h)
+
+        body += _section_header("Last 24h — Per Chain")
+        body += _chain_html(chain_stats)
+
+        body += _section_header("All Time — Funnel")
+        if isinstance(funnel, dict):
+            for status, count in funnel.items():
+                color = _GREEN if status in ("included", "approved", "simulation_approved") else (
+                    _RED if status in ("rejected", "reverted") else _YELLOW
+                )
+                body += _row(status, str(count), color if count else _GRAY)
+        else:
+            body += _row("Funnel", str(funnel), _GRAY)
+
+        total_profit = pnl.get("total_profit", 0) or 0
+        gas_cost_base = pnl.get("total_gas_cost_base", 0) or 0
+        body += _section_header("All Time — PnL")
+        body += _row("Total profit", f"{total_profit:.6f}", _clr(total_profit))
+        body += _row("Realized (quote)", str(pnl.get("total_realized_profit_quote", 0)), _WHITE)
+        body += _row("Gas cost (base)", f"{gas_cost_base:.6f}", _RED if gas_cost_base > 0 else _GRAY)
+        body += _row("Successful", str(pnl.get("successful", 0)), _GREEN if pnl.get("successful") else _GRAY)
+        body += _row("Reverted", str(pnl.get("reverted", 0)), _RED if pnl.get("reverted") else _GRAY)
+        body += _row("Not included", str(pnl.get("not_included", 0)), _YELLOW if pnl.get("not_included") else _GRAY)
+
+        body += _section_header("All Time — Execution")
+        body += _exec_html(exec_stats_all)
+
+        html = _html_wrapper(title, body, self.dashboard_url)
+
+        details = {
+            "period": "24h",
+            "detected_24h": total_24h,
+            "actionable_24h": actionable_24h,
+            "rejected_24h": rejected_24h,
+            "included_24h": included_24h,
+            "all_time_profit": str(pnl.get("total_profit", 0)),
+            "all_time_trades": str(pnl.get("total_trades", 0)),
+            "dashboard": self.dashboard_url,
+        }
+
+        if self.gmail.configured:
+            ok = self.gmail.send("daily_summary", plain, details, html_body=html)
+            if ok:
+                logger.info("Daily email report sent")
+            else:
+                logger.error("Daily email report FAILED to send")
+        else:
+            logger.warning("Daily report skipped — Gmail not configured")
+
+        self._last_daily_at = time.time()
+
+    def maybe_send_daily(self) -> None:
+        """Check if it's time to send the daily report."""
+        if time.time() - self._last_daily_at >= self.daily_interval:
+            self.send_daily_report()
+
+    # ------------------------------------------------------------------
+    # Background threads
+    # ------------------------------------------------------------------
+
     def start_background_hourly(self) -> None:
-        """Start a background thread that sends hourly reports."""
+        """Start a background thread that sends hourly + daily reports."""
         if self._running:
             return
         self._running = True
@@ -160,10 +535,11 @@ class SmartAlerter:
             while self._running:
                 time.sleep(60)  # check every minute
                 self.maybe_send_hourly()
+                self.maybe_send_daily()
 
         self._hourly_thread = Thread(target=_loop, daemon=True)
         self._hourly_thread.start()
-        logger.info("Hourly report thread started")
+        logger.info("Hourly + daily report thread started")
 
     def stop(self) -> None:
         self._running = False

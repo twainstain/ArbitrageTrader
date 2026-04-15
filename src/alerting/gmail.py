@@ -36,6 +36,7 @@ SUBJECT_PREFIX = {
     "trade_not_included": "[Arb] Not Included",
     "simulation_failed": "[Arb] Simulation Failed",
     "system_error": "[Arb] ERROR",
+    "hourly_summary": "[Arb] Hourly Report",
     "daily_summary": "[Arb] Daily Summary",
 }
 
@@ -63,21 +64,23 @@ class GmailAlert:
     def configured(self) -> bool:
         return bool(self.address and self.app_password and self.recipient)
 
-    def send(self, event_type: str, message: str, details: dict | None = None) -> bool:
+    def send(self, event_type: str, message: str, details: dict | None = None,
+             html_body: str | None = None) -> bool:
         if not self.configured:
             logger.debug("Gmail not configured — skipping alert")
             return False
 
         subject = SUBJECT_PREFIX.get(event_type, f"[Arb] {event_type}")
 
-        # Build HTML body with details table.
-        html_body = f"<h3>{event_type.replace('_', ' ').title()}</h3>"
-        html_body += f"<pre>{message}</pre>"
-        if details:
-            html_body += "<table border='1' cellpadding='4' cellspacing='0'>"
-            for key, val in details.items():
-                html_body += f"<tr><td><b>{key}</b></td><td>{val}</td></tr>"
-            html_body += "</table>"
+        # Use caller-supplied HTML or build a default.
+        if html_body is None:
+            html_body = f"<h3>{event_type.replace('_', ' ').title()}</h3>"
+            html_body += f"<pre>{message}</pre>"
+            if details:
+                html_body += "<table border='1' cellpadding='4' cellspacing='0'>"
+                for key, val in details.items():
+                    html_body += f"<tr><td><b>{key}</b></td><td>{val}</td></tr>"
+                html_body += "</table>"
 
         msg = MIMEMultipart("alternative")
         msg["Subject"] = subject

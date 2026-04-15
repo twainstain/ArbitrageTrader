@@ -222,7 +222,9 @@ class ExecutionAndResultTests(unittest.TestCase):
 
         self.repo.save_trade_result(
             execution_id=exec_id, included=True, reverted=False,
-            gas_used=250_000, actual_net_profit=D("0.004"),
+            gas_used=250_000, realized_profit_quote=D("8"),
+            gas_cost_base=D("0.001"), profit_currency="USDC",
+            actual_net_profit=D("0.004"),
             block_number=12345,
         )
 
@@ -230,6 +232,9 @@ class ExecutionAndResultTests(unittest.TestCase):
         self.assertEqual(result["included"], 1)
         self.assertEqual(result["reverted"], 0)
         self.assertEqual(result["gas_used"], 250_000)
+        self.assertEqual(result["realized_profit_quote"], "8")
+        self.assertEqual(result["gas_cost_base"], "0.001")
+        self.assertEqual(result["profit_currency"], "USDC")
         self.assertEqual(result["actual_net_profit"], "0.004")
 
 
@@ -272,7 +277,14 @@ class AggregationTests(unittest.TestCase):
             buy_dex="A", sell_dex="B", spread_bps=D("42"),
         )
         eid = self.repo.save_execution_attempt(opp_id, tx_hash="0x1")
-        self.repo.save_trade_result(eid, included=True, actual_net_profit=D("0.005"))
+        self.repo.save_trade_result(
+            eid,
+            included=True,
+            realized_profit_quote=D("10"),
+            gas_cost_base=D("0.001"),
+            profit_currency="USDC",
+            actual_net_profit=D("0.005"),
+        )
 
         eid2 = self.repo.save_execution_attempt(opp_id, tx_hash="0x2")
         self.repo.save_trade_result(eid2, included=True, reverted=True, actual_net_profit=D("0"))
@@ -281,6 +293,8 @@ class AggregationTests(unittest.TestCase):
         self.assertEqual(summary["total_trades"], 2)
         self.assertEqual(summary["successful"], 1)
         self.assertEqual(summary["reverted"], 1)
+        self.assertAlmostEqual(summary["total_realized_profit_quote"], 10.0)
+        self.assertAlmostEqual(summary["total_gas_cost_base"], 0.001)
 
     def test_opportunity_funnel(self) -> None:
         self.repo.create_opportunity(

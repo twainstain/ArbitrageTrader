@@ -126,6 +126,9 @@ CREATE TABLE IF NOT EXISTS trade_results (
     reverted        INTEGER NOT NULL DEFAULT 0,
     gas_used        INTEGER NOT NULL DEFAULT 0,
     actual_output   TEXT NOT NULL DEFAULT '0',
+    realized_profit_quote TEXT NOT NULL DEFAULT '0',
+    gas_cost_base   TEXT NOT NULL DEFAULT '0',
+    profit_currency TEXT NOT NULL DEFAULT '',
     actual_net_profit TEXT NOT NULL DEFAULT '0',
     block_number    INTEGER NOT NULL DEFAULT 0,
     finalized_at    TEXT NOT NULL
@@ -338,9 +341,36 @@ def init_db(db_path: str | Path | None = None) -> DbConnection:
             db = _connect_sqlite(url)
             db.executescript(_TABLES_SQLITE)
 
+    _ensure_trade_result_columns(db)
     db.commit()
     _db = db
     return db
+
+
+def _ensure_trade_result_columns(db: DbConnection) -> None:
+    """Backfill newer trade_results columns for existing databases."""
+    if db.backend == "sqlite":
+        rows = db.execute("PRAGMA table_info(trade_results)").fetchall()
+        existing = {row["name"] for row in rows}
+        missing = []
+        if "realized_profit_quote" not in existing:
+            missing.append("ALTER TABLE trade_results ADD COLUMN realized_profit_quote TEXT NOT NULL DEFAULT '0'")
+        if "gas_cost_base" not in existing:
+            missing.append("ALTER TABLE trade_results ADD COLUMN gas_cost_base TEXT NOT NULL DEFAULT '0'")
+        if "profit_currency" not in existing:
+            missing.append("ALTER TABLE trade_results ADD COLUMN profit_currency TEXT NOT NULL DEFAULT ''")
+        for sql in missing:
+            db.execute(sql)
+    else:
+        db.execute(
+            "ALTER TABLE trade_results ADD COLUMN IF NOT EXISTS realized_profit_quote TEXT NOT NULL DEFAULT '0'"
+        )
+        db.execute(
+            "ALTER TABLE trade_results ADD COLUMN IF NOT EXISTS gas_cost_base TEXT NOT NULL DEFAULT '0'"
+        )
+        db.execute(
+            "ALTER TABLE trade_results ADD COLUMN IF NOT EXISTS profit_currency TEXT NOT NULL DEFAULT ''"
+        )
 
 
 def get_db() -> DbConnection:

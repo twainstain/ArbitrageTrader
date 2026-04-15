@@ -47,12 +47,24 @@ class KillSwitchTests(_APITestBase):
         self.assertEqual(resp.status_code, 200)
         self.assertFalse(resp.json()["execution_enabled"])
 
-    def test_enable_execution(self):
+    def test_enable_execution_requires_launch_ready(self):
+        resp = self.client.post("/execution", json={"enabled": True})
+        self.assertEqual(resp.status_code, 409)
+        data = resp.json()["detail"]
+        self.assertEqual(data["message"], "launch_not_ready")
+        self.assertFalse(data["launch_ready"])
+
+    def test_enable_execution_when_launch_ready(self):
+        self.repo.set_checkpoint("launch_chain", "arbitrum")
+        self.repo.set_checkpoint("launch_ready", "1")
+        self.repo.set_checkpoint("launch_blockers", "[]")
+        self.repo.set_checkpoint("executor_key_configured", "1")
+        self.repo.set_checkpoint("executor_contract_configured", "1")
+        self.repo.set_checkpoint("rpc_configured", "1")
+
         resp = self.client.post("/execution", json={"enabled": True})
         self.assertEqual(resp.status_code, 200)
         self.assertTrue(resp.json()["execution_enabled"])
-
-        # Verify it persists
         resp2 = self.client.get("/execution")
         self.assertTrue(resp2.json()["execution_enabled"])
 
@@ -60,6 +72,21 @@ class KillSwitchTests(_APITestBase):
         self.policy.execution_enabled = True
         resp = self.client.post("/execution", json={"enabled": False})
         self.assertFalse(resp.json()["execution_enabled"])
+
+    def test_launch_readiness_endpoint(self):
+        self.repo.set_checkpoint("launch_chain", "arbitrum")
+        self.repo.set_checkpoint("launch_ready", "0")
+        self.repo.set_checkpoint("launch_blockers", '["missing_rpc_arbitrum"]')
+        self.repo.set_checkpoint("executor_key_configured", "1")
+        self.repo.set_checkpoint("executor_contract_configured", "1")
+        self.repo.set_checkpoint("rpc_configured", "0")
+
+        resp = self.client.get("/launch-readiness")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["launch_chain"], "arbitrum")
+        self.assertFalse(data["launch_ready"])
+        self.assertEqual(data["launch_blockers"], ["missing_rpc_arbitrum"])
 
 
 class RiskPolicyTests(_APITestBase):
@@ -108,6 +135,36 @@ class OpportunityEndpointTests(_APITestBase):
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.json()["input_amount"], "2200")
 
+    def test_get_opportunity_full_includes_execution_and_trade_result(self):
+        opp_id = self.repo.create_opportunity(
+            pair="WETH/USDC", chain="arbitrum",
+            buy_dex="Uniswap-Arbitrum", sell_dex="Sushi-Arbitrum", spread_bps=D("42"),
+        )
+        exec_id = self.repo.save_execution_attempt(
+            opp_id,
+            submission_type="flashbots",
+            tx_hash="0xabc",
+            target_block=12345,
+        )
+        self.repo.save_trade_result(
+            execution_id=exec_id,
+            included=True,
+            gas_used=210000,
+            realized_profit_quote=D("15"),
+            gas_cost_base=D("0.0015"),
+            profit_currency="USDC",
+            actual_net_profit=D("0.005"),
+            block_number=12346,
+        )
+
+        resp = self.client.get(f"/opportunities/{opp_id}/full")
+        self.assertEqual(resp.status_code, 200)
+        data = resp.json()
+        self.assertEqual(data["execution_attempt"]["tx_hash"], "0xabc")
+        self.assertEqual(data["trade_result"]["realized_profit_quote"], "15")
+        self.assertEqual(data["trade_result"]["gas_cost_base"], "0.0015")
+        self.assertEqual(data["trade_result"]["profit_currency"], "USDC")
+
     def test_get_risk_decision(self):
         opp_id = self.repo.create_opportunity(
             pair="WETH/USDC", chain="ethereum",
@@ -150,6 +207,16 @@ class AggregationEndpointTests(_APITestBase):
         self.repo.set_checkpoint("discovery_snapshot_source", "db_cache")
         self.repo.set_checkpoint("discovery_pair_count", "7")
         self.repo.set_checkpoint("monitored_pools_synced", "3")
+        self.repo.set_checkpoint("live_stack_ready", "1")
+        self.repo.set_checkpoint("live_rollout_target", "arbitrum")
+        self.repo.set_checkpoint("live_executable_chains", "arbitrum,base")
+        self.repo.set_checkpoint("live_executable_dexes", "Uniswap-Arbitrum,Sushi-Arbitrum")
+        self.repo.set_checkpoint("launch_chain", "arbitrum")
+        self.repo.set_checkpoint("launch_ready", "0")
+        self.repo.set_checkpoint("launch_blockers", '["missing_rpc_arbitrum"]')
+        self.repo.set_checkpoint("executor_key_configured", "1")
+        self.repo.set_checkpoint("executor_contract_configured", "1")
+        self.repo.set_checkpoint("rpc_configured", "0")
 
         pair_id = self.repo.save_pair(
             pair="WETH/USDC",
@@ -172,6 +239,16 @@ class AggregationEndpointTests(_APITestBase):
         self.assertEqual(data["discovery_snapshot_source"], "db_cache")
         self.assertEqual(data["last_discovery_pair_count"], 7)
         self.assertEqual(data["last_monitored_pools_synced"], 3)
+        self.assertTrue(data["live_stack_ready"])
+        self.assertEqual(data["live_rollout_target"], "arbitrum")
+        self.assertEqual(data["live_executable_chains"], ["arbitrum", "base"])
+        self.assertEqual(data["live_executable_dexes"], ["Uniswap-Arbitrum", "Sushi-Arbitrum"])
+        self.assertEqual(data["launch_chain"], "arbitrum")
+        self.assertFalse(data["launch_ready"])
+        self.assertEqual(data["launch_blockers"], ["missing_rpc_arbitrum"])
+        self.assertTrue(data["executor_key_configured"])
+        self.assertTrue(data["executor_contract_configured"])
+        self.assertFalse(data["rpc_configured"])
 
     def test_dashboard_html_links_to_ops(self):
         resp = self.client.get("/dashboard")

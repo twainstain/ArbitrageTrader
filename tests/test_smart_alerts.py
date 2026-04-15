@@ -151,8 +151,9 @@ class HourlyEmailTests(_AlertTestBase):
                     return payload.decode("utf-8")
         return raw_msg
 
+    @patch("alerting.smart_alerts._fetch_wallet_data", return_value={"address": "", "balances": {}})
     @patch("alerting.gmail.smtplib.SMTP")
-    def test_sends_hourly_email(self, mock_smtp_cls):
+    def test_sends_hourly_email(self, mock_smtp_cls, _mock_wallet):
         mock_server = MagicMock()
         mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
         mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
@@ -171,8 +172,9 @@ class HourlyEmailTests(_AlertTestBase):
         body = self._decode_email_body(mock_server.sendmail.call_args[0][2])
         self.assertIn("http://test:8000/dashboard", body)
 
+    @patch("alerting.smart_alerts._fetch_wallet_data", return_value={"address": "", "balances": {}})
     @patch("alerting.gmail.smtplib.SMTP")
-    def test_hourly_email_contains_report_fields(self, mock_smtp_cls):
+    def test_hourly_email_contains_report_fields(self, mock_smtp_cls, _mock_wallet):
         mock_server = MagicMock()
         mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
         mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
@@ -186,16 +188,35 @@ class HourlyEmailTests(_AlertTestBase):
         self.assertIn("Detected:", body)
         self.assertIn("Actionable:", body)
         self.assertIn("Sim approved:", body)
-        self.assertIn("PnL:", body)
+        self.assertIn("PNL", body)
+        self.assertIn("WALLET:", body)
+        self.assertIn("EXECUTION", body)
+        self.assertIn("PER CHAIN", body)
         self.assertIn("http://dash:8000/dashboard", body)
+
+    @patch("alerting.smart_alerts._fetch_wallet_data", return_value={"address": "", "balances": {}})
+    @patch("alerting.gmail.smtplib.SMTP")
+    def test_hourly_email_uses_hourly_subject(self, mock_smtp_cls, _mock_wallet):
+        """Hourly report should use 'hourly_summary' event type."""
+        mock_server = MagicMock()
+        mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
+        mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        gm = GmailAlert(address="a@g.com", app_password="pw", recipient="b@g.com")
+        alerter = SmartAlerter(repo=self.repo, telegram=_SAFE_TG, discord=_SAFE_DC, gmail=gm)
+
+        alerter.send_hourly_report()
+        raw_msg = mock_server.sendmail.call_args[0][2]
+        self.assertIn("[Arb] Hourly Report", raw_msg)
 
     def test_no_crash_when_gmail_unconfigured(self):
         gm = GmailAlert(address="", app_password="", recipient="")
         alerter = SmartAlerter(repo=self.repo, telegram=_SAFE_TG, discord=_SAFE_DC, gmail=gm)
         alerter.send_hourly_report()  # should not crash
 
+    @patch("alerting.smart_alerts._fetch_wallet_data", return_value={"address": "", "balances": {}})
     @patch("alerting.gmail.smtplib.SMTP")
-    def test_maybe_send_respects_interval(self, mock_smtp_cls):
+    def test_maybe_send_respects_interval(self, mock_smtp_cls, _mock_wallet):
         mock_server = MagicMock()
         mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
         mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
@@ -204,11 +225,12 @@ class HourlyEmailTests(_AlertTestBase):
         alerter = SmartAlerter(repo=self.repo, telegram=_SAFE_TG, discord=_SAFE_DC, gmail=gm, email_interval_seconds=9999)
 
         alerter.maybe_send_hourly()
-        # Interval not elapsed → should NOT send.
+        # Interval not elapsed -> should NOT send.
         mock_server.sendmail.assert_not_called()
 
+    @patch("alerting.smart_alerts._fetch_wallet_data", return_value={"address": "", "balances": {}})
     @patch("alerting.gmail.smtplib.SMTP")
-    def test_maybe_send_fires_after_interval(self, mock_smtp_cls):
+    def test_maybe_send_fires_after_interval(self, mock_smtp_cls, _mock_wallet):
         mock_server = MagicMock()
         mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
         mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
@@ -224,9 +246,10 @@ class HourlyEmailTests(_AlertTestBase):
 
 
 class HourlyReportChannelTests(_AlertTestBase):
+    @patch("alerting.smart_alerts._fetch_wallet_data", return_value={"address": "", "balances": {}})
     @patch("alerting.discord.requests.post")
     @patch("alerting.gmail.smtplib.SMTP")
-    def test_hourly_sends_email_only_not_discord(self, mock_smtp_cls, mock_dc):
+    def test_hourly_sends_email_only_not_discord(self, mock_smtp_cls, mock_dc, _mock_wallet):
         """Hourly reports go to email only — Discord is for big-win alerts."""
         mock_server = MagicMock()
         mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
@@ -243,6 +266,131 @@ class HourlyReportChannelTests(_AlertTestBase):
     def test_no_crash_when_all_unconfigured(self):
         alerter = SmartAlerter(repo=self.repo, telegram=_SAFE_TG, discord=_SAFE_DC, gmail=_SAFE_GM)
         alerter.send_hourly_report()  # should not crash
+
+
+class DailyEmailTests(_AlertTestBase):
+    @staticmethod
+    def _decode_email_body(raw_msg: str) -> str:
+        import email
+        msg = email.message_from_string(raw_msg)
+        for part in msg.walk():
+            if part.get_content_type() == "text/plain":
+                payload = part.get_payload(decode=True)
+                if payload:
+                    return payload.decode("utf-8")
+        return raw_msg
+
+    @patch("alerting.smart_alerts._fetch_wallet_data", return_value={"address": "", "balances": {}})
+    @patch("alerting.gmail.smtplib.SMTP")
+    def test_sends_daily_email(self, mock_smtp_cls, _mock_wallet):
+        mock_server = MagicMock()
+        mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
+        mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        gm = GmailAlert(address="a@g.com", app_password="pw", recipient="b@g.com")
+        alerter = SmartAlerter(repo=self.repo, telegram=_SAFE_TG, discord=_SAFE_DC, gmail=gm,
+                               dashboard_url="http://test:8000/dashboard")
+
+        self.repo.create_opportunity(
+            pair="WETH/USDC", chain="arbitrum",
+            buy_dex="Uni", sell_dex="Sushi", spread_bps=D("50"),
+        )
+
+        alerter.send_daily_report()
+        mock_server.sendmail.assert_called_once()
+        body = self._decode_email_body(mock_server.sendmail.call_args[0][2])
+        self.assertIn("Daily Arbitrage Summary", body)
+
+    @patch("alerting.smart_alerts._fetch_wallet_data", return_value={"address": "", "balances": {}})
+    @patch("alerting.gmail.smtplib.SMTP")
+    def test_daily_email_contains_all_sections(self, mock_smtp_cls, _mock_wallet):
+        mock_server = MagicMock()
+        mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
+        mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        gm = GmailAlert(address="a@g.com", app_password="pw", recipient="b@g.com")
+        alerter = SmartAlerter(repo=self.repo, telegram=_SAFE_TG, discord=_SAFE_DC, gmail=gm,
+                               dashboard_url="http://test:8000/dashboard")
+
+        alerter.send_daily_report()
+        body = self._decode_email_body(mock_server.sendmail.call_args[0][2])
+        self.assertIn("WALLET:", body)
+        self.assertIn("LAST 24 HOURS", body)
+        self.assertIn("EXECUTION", body)
+        self.assertIn("PER CHAIN", body)
+        self.assertIn("ALL TIME", body)
+        self.assertIn("PNL", body)
+        self.assertIn("FUNNEL", body)
+        self.assertIn("http://test:8000/dashboard", body)
+
+    @patch("alerting.smart_alerts._fetch_wallet_data", return_value={"address": "", "balances": {}})
+    @patch("alerting.gmail.smtplib.SMTP")
+    def test_daily_email_uses_daily_subject(self, mock_smtp_cls, _mock_wallet):
+        mock_server = MagicMock()
+        mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
+        mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        gm = GmailAlert(address="a@g.com", app_password="pw", recipient="b@g.com")
+        alerter = SmartAlerter(repo=self.repo, telegram=_SAFE_TG, discord=_SAFE_DC, gmail=gm)
+
+        alerter.send_daily_report()
+        raw_msg = mock_server.sendmail.call_args[0][2]
+        self.assertIn("[Arb] Daily Summary", raw_msg)
+
+    @patch("alerting.smart_alerts._fetch_wallet_data", return_value={"address": "", "balances": {}})
+    @patch("alerting.gmail.smtplib.SMTP")
+    def test_maybe_send_daily_respects_interval(self, mock_smtp_cls, _mock_wallet):
+        mock_server = MagicMock()
+        mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
+        mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        gm = GmailAlert(address="a@g.com", app_password="pw", recipient="b@g.com")
+        alerter = SmartAlerter(repo=self.repo, telegram=_SAFE_TG, discord=_SAFE_DC, gmail=gm,
+                               daily_interval_seconds=99999)
+
+        alerter.maybe_send_daily()
+        mock_server.sendmail.assert_not_called()
+
+    @patch("alerting.smart_alerts._fetch_wallet_data", return_value={"address": "", "balances": {}})
+    @patch("alerting.gmail.smtplib.SMTP")
+    def test_maybe_send_daily_fires_after_interval(self, mock_smtp_cls, _mock_wallet):
+        mock_server = MagicMock()
+        mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
+        mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        gm = GmailAlert(address="a@g.com", app_password="pw", recipient="b@g.com")
+        alerter = SmartAlerter(repo=self.repo, telegram=_SAFE_TG, discord=_SAFE_DC, gmail=gm,
+                               daily_interval_seconds=1)
+
+        alerter._last_daily_at = time.time() - 2
+        alerter.maybe_send_daily()
+        mock_server.sendmail.assert_called_once()
+
+    def test_no_crash_when_gmail_unconfigured_daily(self):
+        gm = GmailAlert(address="", app_password="", recipient="")
+        alerter = SmartAlerter(repo=self.repo, telegram=_SAFE_TG, discord=_SAFE_DC, gmail=gm)
+        alerter.send_daily_report()  # should not crash
+
+
+class PerChainStatsTests(_AlertTestBase):
+    @patch("alerting.smart_alerts._fetch_wallet_data", return_value={"address": "", "balances": {}})
+    @patch("alerting.gmail.smtplib.SMTP")
+    def test_hourly_shows_per_chain_breakdown(self, mock_smtp_cls, _mock_wallet):
+        mock_server = MagicMock()
+        mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
+        mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+
+        gm = GmailAlert(address="a@g.com", app_password="pw", recipient="b@g.com")
+        alerter = SmartAlerter(repo=self.repo, telegram=_SAFE_TG, discord=_SAFE_DC, gmail=gm)
+
+        # Seed opportunities on two chains.
+        self.repo.create_opportunity("WETH/USDC", "arbitrum", "Uni", "Sushi", D("30"))
+        self.repo.create_opportunity("WETH/USDC", "ethereum", "Uni", "1inch", D("25"))
+
+        alerter.send_hourly_report()
+        body = HourlyEmailTests._decode_email_body(mock_server.sendmail.call_args[0][2])
+        self.assertIn("arbitrum", body)
+        self.assertIn("ethereum", body)
 
 
 class ThresholdTests(unittest.TestCase):

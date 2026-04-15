@@ -229,6 +229,14 @@ class Repository:
         )
         self.conn.commit()
 
+    def get_latest_execution_attempt(self, opp_id: str) -> dict | None:
+        row = self.conn.execute(
+            "SELECT * FROM execution_attempts WHERE opportunity_id = ? "
+            "ORDER BY execution_id DESC LIMIT 1",
+            (opp_id,),
+        ).fetchone()
+        return _row_to_dict(row)
+
     # ------------------------------------------------------------------
     # Trade Results
     # ------------------------------------------------------------------
@@ -240,16 +248,21 @@ class Repository:
         reverted: bool = False,
         gas_used: int = 0,
         actual_output: Decimal = Decimal("0"),
+        realized_profit_quote: Decimal = Decimal("0"),
+        gas_cost_base: Decimal = Decimal("0"),
+        profit_currency: str = "",
         actual_net_profit: Decimal = Decimal("0"),
         block_number: int = 0,
     ) -> int:
         cur = self.conn.execute(
             "INSERT INTO trade_results "
             "(execution_id, included, reverted, gas_used, actual_output, "
+            "realized_profit_quote, gas_cost_base, profit_currency, "
             "actual_net_profit, block_number, finalized_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (execution_id, int(included), int(reverted), gas_used,
-             str(actual_output), str(actual_net_profit), block_number, _now()),
+             str(actual_output), str(realized_profit_quote), str(gas_cost_base),
+             profit_currency, str(actual_net_profit), block_number, _now()),
         )
         self.conn.commit()
         return cur.lastrowid  # type: ignore[return-value]
@@ -324,9 +337,11 @@ class Repository:
         row = self.conn.execute("""
             SELECT
                 COUNT(*) as total_trades,
-                SUM(CASE WHEN included = 1 AND reverted = 0 THEN 1 ELSE 0 END) as successful,
-                SUM(CASE WHEN reverted = 1 THEN 1 ELSE 0 END) as reverted,
-                SUM(CASE WHEN included = 0 THEN 1 ELSE 0 END) as not_included,
+                COALESCE(SUM(CASE WHEN included = 1 AND reverted = 0 THEN 1 ELSE 0 END), 0) as successful,
+                COALESCE(SUM(CASE WHEN reverted = 1 THEN 1 ELSE 0 END), 0) as reverted,
+                COALESCE(SUM(CASE WHEN included = 0 THEN 1 ELSE 0 END), 0) as not_included,
+                COALESCE(SUM(CAST(realized_profit_quote AS REAL)), 0) as total_realized_profit_quote,
+                COALESCE(SUM(CAST(gas_cost_base AS REAL)), 0) as total_gas_cost_base,
                 COALESCE(SUM(CAST(actual_net_profit AS REAL)), 0) as total_profit,
                 COALESCE(SUM(gas_used), 0) as total_gas
             FROM trade_results
@@ -339,6 +354,46 @@ class Repository:
             "SELECT status, COUNT(*) as count FROM opportunities GROUP BY status"
         ).fetchall()
         return {r["status"]: r["count"] for r in rows}
+
+    def get_execution_stats(self, since_iso: str | None = None) -> dict:
+        """Return execution/trade stats, optionally since a timestamp."""
+        _SQL = """
+            SELECT
+                COUNT(*) as total_trades,
+                COALESCE(SUM(CASE WHEN tr.included = 1 AND tr.reverted = 0 THEN 1 ELSE 0 END), 0) as successful,
+                COALESCE(SUM(CASE WHEN tr.reverted = 1 THEN 1 ELSE 0 END), 0) as reverted,
+                COALESCE(SUM(CASE WHEN tr.included = 0 THEN 1 ELSE 0 END), 0) as not_included,
+                COALESCE(SUM(CAST(tr.actual_net_profit AS REAL)), 0) as total_profit,
+                COALESCE(SUM(CAST(tr.gas_cost_base AS REAL)), 0) as total_gas_cost,
+                COALESCE(SUM(tr.gas_used), 0) as total_gas_used
+            FROM trade_results tr
+        """
+        if since_iso:
+            row = self.conn.execute(
+                _SQL + " JOIN execution_attempts ea ON tr.execution_id = ea.execution_id"
+                       " JOIN opportunities o ON ea.opportunity_id = o.opportunity_id"
+                       " WHERE o.detected_at >= ?",
+                (since_iso,),
+            ).fetchone()
+        else:
+            row = self.conn.execute(_SQL).fetchone()
+        return dict(row) if row else {}
+
+    def get_chain_opportunity_stats(self, since_iso: str) -> dict[str, dict]:
+        """Return per-chain opportunity counts grouped by status."""
+        rows = self.conn.execute(
+            "SELECT chain, status, COUNT(*) as cnt FROM opportunities "
+            "WHERE detected_at >= ? AND chain != '' GROUP BY chain, status",
+            (since_iso,),
+        ).fetchall()
+        chains: dict[str, dict] = {}
+        for r in rows:
+            ch = r["chain"]
+            if ch not in chains:
+                chains[ch] = {"total": 0}
+            chains[ch][r["status"]] = r["cnt"]
+            chains[ch]["total"] += r["cnt"]
+        return chains
 
     # ------------------------------------------------------------------
     # Pairs

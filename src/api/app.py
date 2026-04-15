@@ -19,6 +19,7 @@ Or programmatically::
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 from typing import Dict, Optional
@@ -66,6 +67,22 @@ def _get_repo() -> Repository:
         conn = init_db()
         _repo = Repository(conn)
     return _repo
+
+
+def _load_launch_readiness(repo: Repository) -> dict:
+    launch_blockers_raw = repo.get_checkpoint("launch_blockers") or "[]"
+    try:
+        launch_blockers = json.loads(launch_blockers_raw)
+    except json.JSONDecodeError:
+        launch_blockers = []
+    return {
+        "launch_chain": repo.get_checkpoint("launch_chain") or "",
+        "launch_ready": (repo.get_checkpoint("launch_ready") or "0") == "1",
+        "launch_blockers": launch_blockers,
+        "executor_key_configured": (repo.get_checkpoint("executor_key_configured") or "0") == "1",
+        "executor_contract_configured": (repo.get_checkpoint("executor_contract_configured") or "0") == "1",
+        "rpc_configured": (repo.get_checkpoint("rpc_configured") or "0") == "1",
+    }
 
 
 def set_scanner_ref(scanner: object) -> None:
@@ -124,7 +141,20 @@ def create_app(
 
     @app.post("/execution")
     def toggle_execution(body: Dict):
-        _risk_policy.execution_enabled = bool(body.get("enabled", False))
+        requested = bool(body.get("enabled", False))
+        if requested:
+            repo = _get_repo()
+            readiness = _load_launch_readiness(repo)
+            if not readiness["launch_ready"]:
+                _risk_policy.execution_enabled = False
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "message": "launch_not_ready",
+                        **readiness,
+                    },
+                )
+        _risk_policy.execution_enabled = requested
         return {
             "execution_enabled": _risk_policy.execution_enabled,
             "message": "enabled" if _risk_policy.execution_enabled else "disabled",
@@ -133,6 +163,11 @@ def create_app(
     @app.get("/execution")
     def get_execution_status():
         return {"execution_enabled": _risk_policy.execution_enabled}
+
+    @app.get("/launch-readiness")
+    def get_launch_readiness():
+        repo = _get_repo()
+        return _load_launch_readiness(repo)
 
     # --- Pause (soft pause — separate from kill switch) ---
 
@@ -191,20 +226,46 @@ def create_app(
 
     @app.get("/opportunities")
     def get_opportunities(limit: int = 50, window: Optional[str] = None,
-                          chain: Optional[str] = None):
-        """Get recent opportunities with net_profit from pricing, filtered by time window/chain."""
+                          chain: Optional[str] = None,
+                          start: Optional[str] = None,
+                          end: Optional[str] = None):
+        """Get recent opportunities with net_profit and execution data.
+
+        Filters (all optional):
+          - window: predefined window key (5m, 15m, 1h, 4h, 8h, 24h, 3d, 1w, 1m)
+          - start: ISO timestamp (UTC) — show opportunities detected >= start
+          - end: ISO timestamp (UTC) — show opportunities detected <= end
+          - chain: filter by chain name
+          - limit: max rows (default 50)
+
+        ``start``/``end`` take precedence over ``window`` when both are provided.
+        """
         repo = _get_repo()
 
-        # Join opportunities with pricing to get net_profit in one query.
         query = """
-            SELECT o.*, p.expected_net_profit, p.fee_cost, p.slippage_cost, p.gas_estimate
+            SELECT o.*, p.expected_net_profit, p.fee_cost, p.slippage_cost, p.gas_estimate,
+                   e.tx_hash, e.submission_type,
+                   tr.included as exec_included, tr.reverted as exec_reverted,
+                   tr.gas_used as exec_gas_used,
+                   tr.realized_profit_quote, tr.gas_cost_base as exec_gas_cost_base,
+                   tr.actual_net_profit, tr.profit_currency
             FROM opportunities o
             LEFT JOIN pricing_results p ON o.opportunity_id = p.opportunity_id
+            LEFT JOIN execution_attempts e ON o.opportunity_id = e.opportunity_id
+            LEFT JOIN trade_results tr ON e.execution_id = tr.execution_id
         """
-        params = []
-        conditions = []
+        params: list = []
+        conditions: list[str] = []
 
-        if window:
+        # start/end take precedence over window.
+        if start:
+            conditions.append("o.detected_at >= ?")
+            params.append(start)
+        if end:
+            conditions.append("o.detected_at <= ?")
+            params.append(end)
+
+        if not start and not end and window:
             from observability.time_windows import WINDOWS
             from datetime import datetime, timedelta, timezone
             td = WINDOWS.get(window)
@@ -267,11 +328,17 @@ def create_app(
         opp = repo.get_opportunity(opp_id)
         if opp is None:
             raise HTTPException(status_code=404, detail="Opportunity not found")
+        execution = repo.get_latest_execution_attempt(opp_id)
+        trade_result = None
+        if execution is not None:
+            trade_result = repo.get_trade_result(int(execution["execution_id"]))
         return {
             "opportunity": opp,
             "pricing": repo.get_pricing(opp_id),
             "risk_decision": repo.get_risk_decision(opp_id),
             "simulation": repo.get_simulation(opp_id),
+            "execution_attempt": execution,
+            "trade_result": trade_result,
         }
 
     @app.get("/opportunity/{opp_id}", response_class=HTMLResponse)
@@ -304,6 +371,9 @@ def create_app(
     @app.get("/operations")
     def get_operations():
         repo = _get_repo()
+        live_executable_chains = repo.get_checkpoint("live_executable_chains") or ""
+        live_executable_dexes = repo.get_checkpoint("live_executable_dexes") or ""
+        readiness = _load_launch_readiness(repo)
         return {
             "db_backend": repo.conn.backend,
             "discovered_pairs_count": repo.count_discovered_pairs(),
@@ -311,6 +381,11 @@ def create_app(
             "discovery_snapshot_source": repo.get_checkpoint("discovery_snapshot_source") or "unknown",
             "last_discovery_pair_count": int(repo.get_checkpoint("discovery_pair_count") or 0),
             "last_monitored_pools_synced": int(repo.get_checkpoint("monitored_pools_synced") or 0),
+            "live_stack_ready": (repo.get_checkpoint("live_stack_ready") or "0") == "1",
+            "live_rollout_target": repo.get_checkpoint("live_rollout_target") or "",
+            "live_executable_chains": [c for c in live_executable_chains.split(",") if c],
+            "live_executable_dexes": [d for d in live_executable_dexes.split(",") if d],
+            **readiness,
         }
 
     # --- Diagnostics ---
@@ -375,6 +450,20 @@ def create_app(
         repo = _get_repo()
         return get_windowed_stats(repo.conn, window_key, chain)
 
+    @app.get("/dashboard/range")
+    def dashboard_range(start: str, end: Optional[str] = None,
+                        chain: Optional[str] = None):
+        """Get stats for a custom time range (ISO timestamps in UTC).
+
+        Args:
+            start: ISO timestamp (UTC) for range start.
+            end: ISO timestamp (UTC) for range end. Defaults to now.
+            chain: Optional chain filter.
+        """
+        from observability.time_windows import get_range_stats
+        repo = _get_repo()
+        return get_range_stats(repo.conn, start, end, chain)
+
     @app.get("/dashboard/windows")
     def dashboard_all_windows(chain: Optional[str] = None):
         from observability.time_windows import get_all_windows
@@ -386,6 +475,40 @@ def create_app(
         from observability.time_windows import get_chain_summary
         repo = _get_repo()
         return get_chain_summary(repo.conn, window)
+
+    # --- Wallet Balance ---
+
+    @app.get("/wallet/balance")
+    def wallet_balance():
+        """Fetch wallet balance from on-chain RPC (non-blocking cache)."""
+        import os
+        from web3 import Web3
+        from contracts import PUBLIC_RPC_URLS
+        from env import get_rpc_overrides
+
+        private_key = os.environ.get("EXECUTOR_PRIVATE_KEY", "")
+        if not private_key:
+            return {"address": "", "balances": {}, "error": "EXECUTOR_PRIVATE_KEY not set"}
+
+        try:
+            account = Web3().eth.account.from_key(private_key)
+            address = account.address
+        except Exception:
+            return {"address": "", "balances": {}, "error": "invalid key"}
+
+        rpc_overrides = get_rpc_overrides()
+        balances = {}
+        for chain in ["arbitrum", "ethereum", "base"]:
+            rpc_url = rpc_overrides.get(chain, PUBLIC_RPC_URLS.get(chain, ""))
+            if not rpc_url:
+                continue
+            try:
+                w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 3}))
+                bal_wei = w3.eth.get_balance(address)
+                balances[chain] = float(bal_wei) / 1e18
+            except Exception:
+                balances[chain] = None
+        return {"address": address, "balances": balances}
 
     # --- Replay ---
 

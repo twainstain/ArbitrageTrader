@@ -66,6 +66,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .bar-label { font-size: 10px; color: #8b949e; margin-top: 4px; text-align: center; }
         .chart-legend { display: flex; gap: 16px; margin-top: 8px; font-size: 12px; }
         .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 4px; }
+        .sort-arrow { font-size: 10px; color: #484f58; }
+        .sort-arrow.active { color: #58a6ff; }
+        th.sorted { color: #58a6ff; }
+        tr.exec-row { background: #1c2128; cursor: pointer; }
+        tr.exec-row:hover { background: #242a33; }
+        tr.exec-row td:first-child { border-left: 3px solid #d29922; padding-left: 5px; }
+        tr.exec-detail { display: none; }
+        tr.exec-detail.open { display: table-row; }
+        tr.exec-detail td { background: #161b22; padding: 12px 16px; border-left: 3px solid #30363d; }
+        .exec-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+        .exec-item { font-size: 12px; }
+        .exec-label { color: #8b949e; text-transform: uppercase; font-size: 10px; }
+        .exec-value { color: #f0f6fc; font-family: monospace; }
     </style>
 </head>
 <body>
@@ -86,16 +99,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <h2>System Status</h2>
     <div class="grid" id="status-grid"></div>
 
+    <!-- Wallet Balance -->
+    <div class="grid" id="wallet-grid" style="margin-top:12px"></div>
+
     <!-- Link to Ops -->
     <div style="margin:12px 0"><a href="ops" class="tab" style="text-decoration:none">Operations &amp; DEX Health &rarr;</a></div>
 
-    <!-- Chain Filter + Time Window Tabs -->
-    <h2>Performance</h2>
+    <!-- Chain Filter + Time Window Tabs + Custom Range -->
+    <h2>Performance <span style="font-size:11px;color:#8b949e;font-weight:normal;text-transform:none">(times in EST)</span></h2>
     <div class="filter-row">
         <label>Chain:</label>
         <select id="chain-filter" onchange="onChainFilter()">
             <option value="">All Chains</option>
         </select>
+        <span style="color:#30363d">|</span>
+        <label>From:</label>
+        <input type="datetime-local" id="range-start" style="background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 8px;font-size:12px">
+        <label>To:</label>
+        <input type="datetime-local" id="range-end" style="background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 8px;font-size:12px">
+        <button class="btn btn-green" style="padding:4px 12px;font-size:12px" onclick="applyRange()">Apply</button>
+        <button class="btn btn-gray" style="padding:4px 12px;font-size:12px" onclick="clearRange()">Clear</button>
     </div>
     <div class="tabs" id="window-tabs"></div>
     <div class="grid" id="window-grid"></div>
@@ -124,11 +147,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <h2 id="opp-header">Recent Opportunities</h2>
     <table id="opp-table">
         <thead><tr>
-            <th>ID</th><th>Pair</th><th>Chain</th><th>Buy</th><th>Sell</th>
-            <th onclick="sortOpps('spread')">Spread</th>
-            <th onclick="sortOpps('profit')">Net Profit</th>
-            <th onclick="sortOpps('status')">Status</th>
-            <th onclick="sortOpps('time')">Time</th>
+            <th onclick="sortOpps('id')">ID <span class="sort-arrow" data-col="id"></span></th>
+            <th onclick="sortOpps('pair')">Pair <span class="sort-arrow" data-col="pair"></span></th>
+            <th onclick="sortOpps('chain')">Chain <span class="sort-arrow" data-col="chain"></span></th>
+            <th onclick="sortOpps('buy')">Buy <span class="sort-arrow" data-col="buy"></span></th>
+            <th onclick="sortOpps('sell')">Sell <span class="sort-arrow" data-col="sell"></span></th>
+            <th onclick="sortOpps('spread')">Spread <span class="sort-arrow" data-col="spread"></span></th>
+            <th onclick="sortOpps('profit')">Expected Profit <span class="sort-arrow" data-col="profit"></span></th>
+            <th onclick="sortOpps('realized')">Realized PnL <span class="sort-arrow" data-col="realized"></span></th>
+            <th onclick="sortOpps('status')">Status <span class="sort-arrow" data-col="status"></span></th>
+            <th onclick="sortOpps('time')">Time (EST) <span class="sort-arrow" data-col="time"></span></th>
         </tr></thead>
         <tbody></tbody>
     </table>
@@ -141,13 +169,74 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const WINDOWS = ['5m','15m','1h','4h','8h','24h','3d','1w','1m'];
     let currentWindow = '15m';
     let selectedChain = '';
-    let oppSortField = 'spread';
+    let customStart = '';
+    let customEnd = '';
+    let oppSortField = 'profit';
     let oppSortDesc = true;
     let chainSortField = 'total';
     let chainData = [];
     let oppData = [];
 
     async function fetchJSON(url) { const r = await fetch(API_BASE + url); return r.json(); }
+
+    // Convert UTC ISO timestamp to EST display string.
+    function toEST(isoUtc) {
+        if (!isoUtc) return '';
+        try {
+            // Ensure it's parsed as UTC.
+            let d = new Date(isoUtc.endsWith('Z') || isoUtc.includes('+') ? isoUtc : isoUtc + 'Z');
+            return d.toLocaleString('en-US', {timeZone:'America/New_York', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
+        } catch(e) { return isoUtc.slice(11,19); }
+    }
+    function toESTShort(isoUtc) {
+        if (!isoUtc) return '';
+        try {
+            let d = new Date(isoUtc.endsWith('Z') || isoUtc.includes('+') ? isoUtc : isoUtc + 'Z');
+            return d.toLocaleString('en-US', {timeZone:'America/New_York', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
+        } catch(e) { return isoUtc.slice(11,19); }
+    }
+
+    // Convert local datetime-local input (EST) to UTC ISO for the API.
+    function estInputToUTC(val) {
+        if (!val) return '';
+        // datetime-local gives us a naive datetime — interpret as EST.
+        let d = new Date(val + ':00');
+        // Create date in EST timezone.
+        let estStr = val + ':00';
+        try {
+            let parts = val.split('T');
+            let [y,m,dy] = parts[0].split('-').map(Number);
+            let [hr,mn] = parts[1].split(':').map(Number);
+            // Build a date string with EST offset and let Date parse it.
+            let est = new Date(`${parts[0]}T${parts[1]}:00-05:00`);
+            // During EDT (Mar-Nov) offset is -04:00, but this is close enough.
+            // Use Intl to get proper offset.
+            let formatter = new Intl.DateTimeFormat('en-US', {timeZone:'America/New_York', timeZoneName:'short'});
+            let tzParts = formatter.formatToParts(new Date());
+            let tzName = tzParts.find(p => p.type === 'timeZoneName')?.value || 'EST';
+            let offset = tzName.includes('EDT') ? '-04:00' : '-05:00';
+            est = new Date(`${parts[0]}T${parts[1]}:00${offset}`);
+            return est.toISOString();
+        } catch(e) { return d.toISOString(); }
+    }
+
+    function applyRange() {
+        let startVal = document.getElementById('range-start').value;
+        let endVal = document.getElementById('range-end').value;
+        if (!startVal) return;
+        customStart = estInputToUTC(startVal);
+        customEnd = endVal ? estInputToUTC(endVal) : '';
+        currentWindow = '';
+        loadWindows(); loadOpportunities();
+    }
+    function clearRange() {
+        customStart = '';
+        customEnd = '';
+        document.getElementById('range-start').value = '';
+        document.getElementById('range-end').value = '';
+        currentWindow = '15m';
+        loadWindows(); loadOpportunities();
+    }
 
     function statusClass(val, goodIf) {
         if (goodIf === 'true') return val ? 'status-ok' : 'status-bad';
@@ -200,9 +289,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <div class="card-sub">Inclusion: ${metrics.inclusion_rate_pct}% | Revert: ${metrics.revert_rate_pct}%</div>
             </div>
             <div class="card">
-                <div class="card-title">Total PnL</div>
+                <div class="card-title">Execution PnL</div>
                 <div class="card-value">${Number(pnl.total_profit || 0).toFixed(6)}</div>
-                <div class="card-sub">${pnl.successful || 0} successful / ${pnl.reverted || 0} reverted</div>
+                <div class="card-sub">${pnl.successful || 0} included / ${pnl.reverted || 0} reverted / ${pnl.not_included || 0} not included</div>
             </div>
             <div class="card">
                 <div class="card-title">Avg Latency</div>
@@ -214,11 +303,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     async function loadWindows() {
         const tabs = document.getElementById('window-tabs');
+        const customActive = customStart ? 'active' : '';
         tabs.innerHTML = WINDOWS.map(w =>
-            `<a class="tab ${w===currentWindow?'active':''}" onclick="setWindow('${w}')">${w}</a>`
-        ).join('');
-        const chainParam = selectedChain ? `?chain=${selectedChain}` : '';
-        const data = await fetchJSON(`/dashboard/window/${currentWindow}${chainParam}`);
+            `<a class="tab ${w===currentWindow && !customStart?'active':''}" onclick="setWindow('${w}')">${w}</a>`
+        ).join('') + (customStart ? `<a class="tab active">Custom</a>` : '');
+
+        let data;
+        if (customStart) {
+            let url = `/dashboard/range?start=${encodeURIComponent(customStart)}`;
+            if (customEnd) url += `&end=${encodeURIComponent(customEnd)}`;
+            if (selectedChain) url += `&chain=${selectedChain}`;
+            data = await fetchJSON(url);
+        } else {
+            const chainParam = selectedChain ? `?chain=${selectedChain}` : '';
+            data = await fetchJSON(`/dashboard/window/${currentWindow}${chainParam}`);
+        }
         const grid = document.getElementById('window-grid');
         const o = data.opportunities || {};
         const t = data.trades || {};
@@ -308,66 +407,172 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     function sortChains(field) { chainSortField = field; renderChains(); }
 
     async function loadOpportunities() {
-        // Filter by current time window AND chain selection.
-        let url = '/opportunities?limit=50&window=' + currentWindow;
+        let url = '/opportunities?limit=50';
+        if (customStart) {
+            url += '&start=' + encodeURIComponent(customStart);
+            if (customEnd) url += '&end=' + encodeURIComponent(customEnd);
+        } else {
+            url += '&window=' + currentWindow;
+        }
         if (selectedChain) url += '&chain=' + selectedChain;
         oppData = await fetchJSON(url);
         renderOpps();
     }
 
+    function hasExecution(o) {
+        return ['submitted','included','reverted','not_included'].includes(o.status);
+    }
+    function execPriority(s) {
+        if (s === 'included') return 6;
+        if (s === 'submitted') return 5;
+        if (s === 'reverted') return 4;
+        if (s === 'not_included') return 3;
+        if (['approved','dry_run','simulation_approved','simulated'].includes(s)) return 2;
+        if (s === 'rejected' || s === 'simulation_failed') return 0;
+        return 1;
+    }
+    function isApproved(s) {
+        return ['approved','included','dry_run','simulation_approved','simulated','submitted','reverted','not_included'].includes(s);
+    }
+
     function renderOpps() {
-        // Update header to show current window + count.
         const chainLabel = selectedChain ? ' (' + selectedChain + ')' : '';
         document.getElementById('opp-header').textContent =
-            'Opportunities (' + currentWindow + chainLabel + ') — ' + oppData.length + ' found';
+            'Opportunities (' + currentWindow + chainLabel + ') \u2014 ' + oppData.length + ' found';
 
         let data = [...oppData];
-        // Default: winners first (approved/included before rejected), then by spread desc
-        if (oppSortField === 'spread') {
-            data.sort((a,b) => {
-                const aw = isWin(a.status) ? 1 : 0;
-                const bw = isWin(b.status) ? 1 : 0;
-                if (aw !== bw) return bw - aw;
-                return Number(b.spread_bps) - Number(a.spread_bps);
-            });
-        } else if (oppSortField === 'status') {
-            data.sort((a,b) => {
-                const aw = isWin(a.status) ? 1 : 0;
-                const bw = isWin(b.status) ? 1 : 0;
-                return bw - aw;
-            });
-        } else if (oppSortField === 'profit') {
-            data.sort((a,b) => {
-                const ap = Number(a.expected_net_profit || 0);
-                const bp = Number(b.expected_net_profit || 0);
-                return bp - ap;
-            });
-        } else if (oppSortField === 'time') {
-            data.sort((a,b) => b.detected_at.localeCompare(a.detected_at));
-        }
+
+        // Sort: executed first, then by selected field
+        const dir = oppSortDesc ? -1 : 1;
+        data.sort((a,b) => {
+            // Always: executed transactions first
+            const ae = execPriority(a.status);
+            const be = execPriority(b.status);
+            if (ae !== be) return be - ae;
+
+            // Then by selected column
+            if (oppSortField === 'profit') {
+                return dir * (Number(b.expected_net_profit||0) - Number(a.expected_net_profit||0));
+            } else if (oppSortField === 'realized') {
+                return dir * (Number(b.actual_net_profit||0) - Number(a.actual_net_profit||0));
+            } else if (oppSortField === 'spread') {
+                return dir * (Number(b.spread_bps||0) - Number(a.spread_bps||0));
+            } else if (oppSortField === 'status') {
+                return dir * (execPriority(b.status) - execPriority(a.status));
+            } else if (oppSortField === 'time') {
+                return dir * b.detected_at.localeCompare(a.detected_at);
+            } else if (oppSortField === 'pair') {
+                return dir * a.pair.localeCompare(b.pair);
+            } else if (oppSortField === 'chain') {
+                return dir * a.chain.localeCompare(b.chain);
+            } else if (oppSortField === 'buy') {
+                return dir * a.buy_dex.localeCompare(b.buy_dex);
+            } else if (oppSortField === 'sell') {
+                return dir * a.sell_dex.localeCompare(b.sell_dex);
+            } else if (oppSortField === 'id') {
+                return dir * a.opportunity_id.localeCompare(b.opportunity_id);
+            }
+            return 0;
+        });
+
+        // Update sort arrows
+        document.querySelectorAll('.sort-arrow').forEach(el => {
+            const col = el.dataset.col;
+            if (col === oppSortField) {
+                el.textContent = oppSortDesc ? '\u25BC' : '\u25B2';
+                el.className = 'sort-arrow active';
+            } else {
+                el.textContent = '';
+                el.className = 'sort-arrow';
+            }
+        });
 
         const tbody = document.querySelector('#opp-table tbody');
-        tbody.innerHTML = data.slice(0, 30).map(o => {
-            // Net profit in WETH and approx USD.
+        let rows = '';
+        for (const o of data.slice(0, 50)) {
             const profitWeth = o.expected_net_profit ? Number(o.expected_net_profit) : 0;
-            const profitUsd = (profitWeth * 2220).toFixed(2);
+            const profitUsd = (profitWeth * 2300).toFixed(2);
             const profitColor = profitWeth > 0 ? '#3fb950' : '#f85149';
-            return `
-            <tr>
-                <td><a href="${API_BASE}/opportunity/${o.opportunity_id}" style="color:#58a6ff">${o.opportunity_id.slice(4,16)}</a></td>
+            const showExpected = isApproved(o.status);
+            const hasExec = hasExecution(o);
+            const rowClass = hasExec ? 'exec-row' : '';
+            const rowClick = hasExec ? `onclick="toggleExecDetail('${o.opportunity_id}')"` : '';
+
+            // Realized PnL column
+            let realizedHtml = '<span style="color:#484f58">-</span>';
+            if (o.actual_net_profit !== null && o.actual_net_profit !== undefined) {
+                const rp = Number(o.actual_net_profit);
+                const rpUsd = (rp * 2300).toFixed(2);
+                const rpColor = rp > 0 ? '#3fb950' : rp < 0 ? '#f85149' : '#8b949e';
+                realizedHtml = `<span style="color:${rpColor};font-weight:bold">$${rpUsd}</span>`;
+            }
+
+            rows += `<tr class="${rowClass}" ${rowClick}>
+                <td><a href="${API_BASE}/opportunity/${o.opportunity_id}" style="color:#58a6ff" onclick="event.stopPropagation()">${o.opportunity_id.slice(4,16)}</a></td>
                 <td>${o.pair}</td>
                 <td>${o.chain}</td>
                 <td>${o.buy_dex}</td>
                 <td>${o.sell_dex}</td>
-                <td>${Number(o.spread_bps).toFixed(2)}%</td>
-                <td style="color:${profitColor};font-weight:bold">$${profitUsd}</td>
+                <td>${(Number(o.spread_bps)/100).toFixed(2)}%</td>
+                <td>${showExpected ? `<span style="color:${profitColor};font-weight:bold">$${profitUsd}</span>` : '<span style="color:#484f58">-</span>'}</td>
+                <td>${realizedHtml}</td>
                 <td><span class="tag ${tagClass(o.status)}">${o.status}</span></td>
-                <td>${o.detected_at.slice(11,19)}</td>
+                <td title="${o.detected_at}">${toESTShort(o.detected_at)}</td>
             </tr>`;
-        }).join('');
+
+            // Expandable execution detail row
+            if (hasExec) {
+                const txHash = o.tx_hash || 'n/a';
+                const txShort = txHash.length > 12 ? txHash.slice(0,10) + '...' : txHash;
+                const gasUsed = o.exec_gas_used || 0;
+                const gasCost = o.exec_gas_cost_base ? Number(o.exec_gas_cost_base).toFixed(6) : '0';
+                const realProfit = o.realized_profit_quote ? Number(o.realized_profit_quote).toFixed(4) : '0';
+                const netProfit = o.actual_net_profit ? Number(o.actual_net_profit).toFixed(6) : '0';
+                const incl = o.exec_included ? 'YES' : 'NO';
+                const rev = o.exec_reverted ? 'YES' : 'NO';
+                const profCur = o.profit_currency || '';
+
+                rows += `<tr class="exec-detail" id="detail-${o.opportunity_id}">
+                    <td colspan="10">
+                        <div class="exec-grid">
+                            <div class="exec-item"><div class="exec-label">TX Hash</div>
+                                <div class="exec-value">${txHash !== 'n/a' ? `<a href="https://arbiscan.io/tx/${txHash}" target="_blank" style="color:#58a6ff">${txShort}</a>` : 'n/a'}</div></div>
+                            <div class="exec-item"><div class="exec-label">Included</div>
+                                <div class="exec-value" style="color:${o.exec_included ? '#3fb950' : '#f85149'}">${incl}</div></div>
+                            <div class="exec-item"><div class="exec-label">Reverted</div>
+                                <div class="exec-value" style="color:${o.exec_reverted ? '#f85149' : '#3fb950'}">${rev}</div></div>
+                            <div class="exec-item"><div class="exec-label">Gas Used</div>
+                                <div class="exec-value">${gasUsed.toLocaleString()}</div></div>
+                            <div class="exec-item"><div class="exec-label">Gas Cost</div>
+                                <div class="exec-value">${gasCost} ETH</div></div>
+                            <div class="exec-item"><div class="exec-label">Realized Profit ${profCur}</div>
+                                <div class="exec-value">${realProfit}</div></div>
+                            <div class="exec-item"><div class="exec-label">Net PnL (base)</div>
+                                <div class="exec-value" style="color:${Number(netProfit) >= 0 ? '#3fb950' : '#f85149'}">${netProfit} ETH</div></div>
+                            <div class="exec-item"><div class="exec-label">Expected</div>
+                                <div class="exec-value">${profitUsd !== '0.00' ? '$'+profitUsd : '-'}</div></div>
+                        </div>
+                    </td>
+                </tr>`;
+            }
+        }
+        tbody.innerHTML = rows;
     }
 
-    function sortOpps(field) { oppSortField = field; renderOpps(); }
+    function sortOpps(field) {
+        if (oppSortField === field) {
+            oppSortDesc = !oppSortDesc;
+        } else {
+            oppSortField = field;
+            oppSortDesc = true;
+        }
+        renderOpps();
+    }
+
+    function toggleExecDetail(oppId) {
+        const row = document.getElementById('detail-' + oppId);
+        if (row) row.classList.toggle('open');
+    }
 
     async function loadBarChart() {
         const rows = await fetchJSON('/dashboard/hourly-bars');
@@ -405,7 +610,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }).join('') + '</div>';
     }
 
-    function setWindow(w) { currentWindow = w; loadWindows(); loadOpportunities(); loadBarChart(); }
+    function setWindow(w) {
+        customStart = ''; customEnd = '';
+        document.getElementById('range-start').value = '';
+        document.getElementById('range-end').value = '';
+        currentWindow = w;
+        loadWindows(); loadOpportunities(); loadBarChart();
+    }
 
     // --- Scanner control functions ---
 
@@ -444,9 +655,47 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         setTimeout(loadScannerStatus, 300);
     }
 
+    async function loadWalletBalance() {
+        try {
+            const data = await fetchJSON('/wallet/balance');
+            const grid = document.getElementById('wallet-grid');
+            if (!data.address || data.error) {
+                grid.innerHTML = '';
+                return;
+            }
+            const addr = data.address;
+            const short = addr.slice(0,6) + '...' + addr.slice(-4);
+            let cards = `<div class="card">
+                <div class="card-title">Wallet</div>
+                <div class="card-value" style="font-size:16px"><a href="https://arbiscan.io/address/${addr}" target="_blank" style="color:#58a6ff">${short}</a></div>
+            </div>`;
+            let totalEth = 0;
+            for (const [chain, bal] of Object.entries(data.balances)) {
+                if (bal === null) continue;
+                totalEth += bal;
+                const usd = (bal * 2300).toFixed(2);
+                const color = bal > 0.001 ? '#3fb950' : '#f85149';
+                cards += `<div class="card">
+                    <div class="card-title">${chain} Balance</div>
+                    <div class="card-value" style="color:${color}">${bal.toFixed(6)} ETH</div>
+                    <div class="card-sub">~$${usd}</div>
+                </div>`;
+            }
+            const totalUsd = (totalEth * 2300).toFixed(2);
+            cards += `<div class="card">
+                <div class="card-title">Total Balance</div>
+                <div class="card-value">${totalEth.toFixed(6)} ETH</div>
+                <div class="card-sub">~$${totalUsd}</div>
+            </div>`;
+            grid.innerHTML = cards;
+        } catch(e) { console.warn('Wallet balance load failed:', e); }
+    }
+
     async function init() {
         await loadChainFilter();
         await Promise.all([loadStatus(), loadWindows(), loadChains(), loadOpportunities(), loadBarChart(), loadScannerStatus()]);
+        // Load wallet balance async (non-blocking, may be slow due to RPC calls)
+        loadWalletBalance();
     }
     init();
     // Refresh scanner status every 10 seconds.
@@ -495,6 +744,13 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
 
     function val(v) { return v !== null && v !== undefined ? v : '<span class="empty">n/a</span>'; }
     function num(v, d=6) { return v !== null && v !== undefined ? Number(v).toFixed(d) : '<span class="empty">n/a</span>'; }
+    function toEST(isoUtc) {
+        if (!isoUtc) return 'n/a';
+        try {
+            let d = new Date(isoUtc.endsWith('Z') || isoUtc.includes('+') ? isoUtc : isoUtc + 'Z');
+            return d.toLocaleString('en-US', {timeZone:'America/New_York', year:'numeric', month:'short', day:'numeric', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false}) + ' EST';
+        } catch(e) { return isoUtc; }
+    }
 
     function renderSection(title, rows) {
         if (!rows) return `<h2>${title}</h2><div class="section"><p class="empty">No data</p></div>`;
@@ -523,10 +779,10 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
             'Chain': o.chain || 'unknown',
             'Buy DEX': o.buy_dex,
             'Sell DEX': o.sell_dex,
-            'Spread': num(o.spread_bps, 4) + '%',
+            'Spread': num(o.spread_bps / 100, 4) + '%',
             'Status': `<span class="tag tag-${['approved','included','dry_run','simulation_approved'].includes(o.status)?'approved':o.status==='rejected'?'rejected':'detected'}">${o.status}</span>`,
-            'Detected At': o.detected_at,
-            'Updated At': o.updated_at,
+            'Detected At': toEST(o.detected_at),
+            'Updated At': toEST(o.updated_at),
         });
 
         // Pricing — cost waterfall breakdown
@@ -560,7 +816,7 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
                         ${net.toFixed(6)} ETH (~$${netUsd})
                     </td></tr>
             </table>
-            <div style="margin-top:8px;color:#484f58;font-size:11px">Priced at ${p.created_at || 'n/a'}</div>
+            <div style="margin-top:8px;color:#484f58;font-size:11px">Priced at ${toEST(p.created_at)}</div>
             </div>`;
         } else {
             html += renderSection('Cost Breakdown', null);
@@ -623,7 +879,7 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
             if (details.simulation)
                 riskHtml += `<tr><th>Mode</th><td class="mono"><span class="tag tag-approved">SIMULATION</span> — would execute if live</td></tr>`;
 
-            riskHtml += `<tr style="border-top:1px solid #30363d"><th>Decided At</th><td class="mono">${r.created_at}</td></tr>`;
+            riskHtml += `<tr style="border-top:1px solid #30363d"><th>Decided At</th><td class="mono">${toEST(r.created_at)}</td></tr>`;
             riskHtml += '</table></div>';
             html += riskHtml;
         } else {
@@ -638,10 +894,35 @@ OPPORTUNITY_DETAIL_HTML = """<!DOCTYPE html>
                 'Revert Reason': s.revert_reason || 'n/a',
                 'Expected Output': num(s.expected_output, 6),
                 'Expected Net Profit': num(s.expected_net_profit, 6),
-                'Simulated At': s.created_at,
+                'Simulated At': toEST(s.created_at),
             });
         } else {
             html += renderSection('Simulation', null);
+        }
+
+        const e = data.execution_attempt;
+        const tr = data.trade_result;
+        if (e || tr) {
+            let execRows = {};
+            if (e) {
+                execRows['Submission Type'] = e.submission_type || 'n/a';
+                execRows['TX Hash'] = e.tx_hash || 'n/a';
+                execRows['Bundle ID'] = e.bundle_id || 'n/a';
+                execRows['Target Block'] = e.target_block || 'n/a';
+                execRows['Submitted At'] = toEST(e.submitted_at);
+            }
+            if (tr) {
+                execRows['Included'] = tr.included ? '<span class="tag tag-approved">YES</span>' : '<span class="tag tag-detected">NO</span>';
+                execRows['Reverted'] = tr.reverted ? '<span class="tag tag-rejected">YES</span>' : 'NO';
+                execRows['Gas Used'] = tr.gas_used;
+                execRows['Realized Quote Profit'] = `${num(tr.realized_profit_quote, 6)} ${tr.profit_currency || ''}`.trim();
+                execRows['Gas Cost (Base)'] = `${num(tr.gas_cost_base, 6)} ETH`;
+                execRows['Net Profit (Base)'] = `${num(tr.actual_net_profit, 6)} ETH`;
+                execRows['Finalized At'] = toEST(tr.finalized_at);
+            }
+            html += renderSection('Execution', execRows);
+        } else {
+            html += renderSection('Execution', null);
         }
 
         document.getElementById('content').innerHTML = html;
@@ -728,8 +1009,19 @@ OPS_DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function loadInfra() {
-        const ops = await fetchJSON('/operations');
+        const [ops, pnl] = await Promise.all([fetchJSON('/operations'), fetchJSON('/pnl')]);
+        const blockers = (ops.launch_blockers || []).slice(0, 2).join(', ') || 'none';
         document.getElementById('infra-grid').innerHTML = `
+            <div class="card">
+                <div class="card-title">Live Stack</div>
+                <div class="card-value ${ops.live_stack_ready ? 'status-ok' : 'status-warn'}">${ops.live_stack_ready ? 'READY' : 'SIMULATION ONLY'}</div>
+                <div class="card-sub">Target: ${ops.live_rollout_target || 'none'}</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Launch Ready</div>
+                <div class="card-value ${ops.launch_ready ? 'status-ok' : 'status-warn'}">${ops.launch_ready ? 'YES' : 'NOT YET'}</div>
+                <div class="card-sub">${ops.launch_chain || 'none'} | ${blockers}</div>
+            </div>
             <div class="card">
                 <div class="card-title">DB Backend</div>
                 <div class="card-value">${ops.db_backend || 'unknown'}</div>
@@ -747,6 +1039,36 @@ OPS_DASHBOARD_HTML = """<!DOCTYPE html>
                 <div class="card-title">Enabled Pools</div>
                 <div class="card-value">${ops.enabled_pools_total || 0}</div>
                 <div class="card-sub">Last sync: ${ops.last_monitored_pools_synced || 0} inserted</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Executable Chains</div>
+                <div class="card-value">${(ops.live_executable_chains || []).length}</div>
+                <div class="card-sub">${(ops.live_executable_chains || []).join(', ') || 'none'}</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Executable Venues</div>
+                <div class="card-value">${(ops.live_executable_dexes || []).length}</div>
+                <div class="card-sub">${(ops.live_executable_dexes || []).slice(0,3).join(', ') || 'none'}</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Executor Config</div>
+                <div class="card-value">${ops.executor_contract_configured && ops.executor_key_configured ? 'SET' : 'MISSING'}</div>
+                <div class="card-sub">key=${ops.executor_key_configured ? 'yes' : 'no'} contract=${ops.executor_contract_configured ? 'yes' : 'no'} rpc=${ops.rpc_configured ? 'yes' : 'no'}</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Realized Quote Profit</div>
+                <div class="card-value">${Number(pnl.total_realized_profit_quote || 0).toFixed(6)}</div>
+                <div class="card-sub">Raw quote-token payout before base conversion</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Gas Cost (Base)</div>
+                <div class="card-value">${Number(pnl.total_gas_cost_base || 0).toFixed(6)}</div>
+                <div class="card-sub">Stored separately from realized quote profit</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Net Profit (Base)</div>
+                <div class="card-value">${Number(pnl.total_profit || 0).toFixed(6)}</div>
+                <div class="card-sub">Only populated when base conversion is safe</div>
             </div>
         `;
     }
@@ -817,7 +1139,7 @@ OPS_DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function loadMetrics() {
-        const m = await fetchJSON('/metrics');
+        const [m, pnl] = await Promise.all([fetchJSON('/metrics'), fetchJSON('/pnl')]);
         const grid = document.getElementById('metrics-grid');
         const upH = (m.uptime_seconds / 3600).toFixed(1);
         grid.innerHTML = `
@@ -845,6 +1167,11 @@ OPS_DASHBOARD_HTML = """<!DOCTYPE html>
                 <div class="card-title">Executions</div>
                 <div class="card-value">${m.executions_submitted}</div>
                 <div class="card-sub">Included: ${m.executions_included} | Reverted: ${m.executions_reverted}</div>
+            </div>
+            <div class="card">
+                <div class="card-title">Execution PnL</div>
+                <div class="card-value ${Number(pnl.total_profit || 0) > 0 ? 'status-ok' : Number(pnl.total_profit || 0) < 0 ? 'status-bad' : ''}">${Number(pnl.total_profit || 0).toFixed(6)} ETH</div>
+                <div class="card-sub">${pnl.successful || 0} included / ${pnl.reverted || 0} reverted / ${pnl.not_included || 0} not included</div>
             </div>
             <div class="card">
                 <div class="card-title">Total Expected Profit</div>

@@ -1,0 +1,16 @@
+{
+  "pair": "WETH/USDC",
+  "base_asset": "WETH",
+  "quote_asset": "USDC",
+  "trade_size": 0.1,
+  "min_profit_base": 0.001,
+  "estimated_gas_cost_base": 0.00005,
+  "flash_loan_fee_bps": 9.0,
+  "flash_loan_provider": "aave_v3",
+  "slippage_bps": 30.0,
+  "poll_interval_seconds": 10.0,
+  "dexes": [
+    {"name": "Uniswap-Optimism", "base_price": 0, "fee_bps": 5.0, "volatility_bps": 0, "chain": "optimism", "dex_type": "uniswap_v3"},
+    {"name": "Velodrome-Optimism", "base_price": 0, "fee_bps": 20.0, "volatility_bps": 0, "chain": "optimism", "dex_type": "velodrome_v2"}
+  ]
+}

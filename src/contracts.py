@@ -232,7 +232,7 @@ VELO_ROUTER_ABI = [
 
 # Default pool factories for route construction.
 VELO_FACTORY: dict[str, str] = {
-    "optimism": "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",  # Velodrome V2
+    "optimism": "0xF1046053aa5682b4F9a81b5481394DA16BE5FF5a",  # Velodrome V2
     "base": "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",      # Aerodrome
 }
 

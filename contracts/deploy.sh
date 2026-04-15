@@ -27,31 +27,44 @@
 #   EXECUTOR_CONTRACT=0x...
 # ============================================================
 
-set -euo pipefail
+set -eo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# Load .env from project root
+# Load .env from project root (parse safely — .env may have unquoted
+# values with spaces or # characters that break `source`).
 if [[ -f "$PROJECT_ROOT/.env" ]]; then
-    set -a
-    source "$PROJECT_ROOT/.env"
-    set +a
+    while IFS='=' read -r key value; do
+        case "$key" in \#*|"") continue ;; esac
+        # Strip inline comments and leading/trailing quotes/spaces
+        value="${value%%\#*}"
+        value="${value%"${value##*[![:space:]]}"}"
+        value="${value#\'}"
+        value="${value%\'}"
+        export "$key=$value" 2>/dev/null || true
+    done < "$PROJECT_ROOT/.env"
 fi
 
 # --- Aave V3 Pool addresses (must match chain_executor.py) ---
-declare -A AAVE_POOLS=(
-    ["ethereum"]="0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2"
-    ["arbitrum"]="0x794a61358D6845594F94dc1DB02A252b5b4814aD"
-    ["base"]="0xA238Dd80C259a72e81d7e4664a9801593F98d1c5"
-)
+get_aave_pool() {
+    case "$1" in
+        ethereum) echo "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2" ;;
+        arbitrum) echo "0x794a61358D6845594F94dc1DB02A252b5b4814aD" ;;
+        base)     echo "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5" ;;
+        *)        echo "" ;;
+    esac
+}
 
 # --- RPC URL resolution ---
-declare -A RPC_VARS=(
-    ["ethereum"]="RPC_ETHEREUM"
-    ["arbitrum"]="RPC_ARBITRUM"
-    ["base"]="RPC_BASE"
-)
+get_rpc_url() {
+    case "$1" in
+        ethereum) echo "${RPC_ETHEREUM:-}" ;;
+        arbitrum) echo "${RPC_ARBITRUM:-}" ;;
+        base)     echo "${RPC_BASE:-}" ;;
+        *)        echo "" ;;
+    esac
+}
 
 # --- Parse args ---
 CHAIN="${1:-}"
@@ -63,7 +76,7 @@ fi
 if [[ -z "$CHAIN" ]]; then
     echo "Usage: ./deploy.sh <chain> [--dry]"
     echo ""
-    echo "Supported chains: ${!AAVE_POOLS[*]}"
+    echo "Supported chains: ethereum, arbitrum, base"
     echo ""
     echo "Examples:"
     echo "  ./deploy.sh arbitrum        # deploy to Arbitrum"
@@ -72,18 +85,17 @@ if [[ -z "$CHAIN" ]]; then
 fi
 
 # --- Validate chain ---
-AAVE_POOL="${AAVE_POOLS[$CHAIN]:-}"
+AAVE_POOL=$(get_aave_pool "$CHAIN")
 if [[ -z "$AAVE_POOL" ]]; then
     echo "ERROR: Unsupported chain '$CHAIN'"
-    echo "Supported: ${!AAVE_POOLS[*]}"
+    echo "Supported: ethereum, arbitrum, base"
     exit 1
 fi
 
 # --- Resolve RPC URL ---
-RPC_VAR="${RPC_VARS[$CHAIN]:-}"
-RPC_URL="${!RPC_VAR:-}"
+RPC_URL=$(get_rpc_url "$CHAIN")
 if [[ -z "$RPC_URL" ]]; then
-    echo "ERROR: $RPC_VAR not set in .env"
+    echo "ERROR: RPC_${CHAIN^^} not set in .env"
     exit 1
 fi
 
@@ -136,6 +148,7 @@ else
         --rpc-url "$RPC_URL" \
         --private-key "$EXECUTOR_PRIVATE_KEY" \
         --constructor-args "$AAVE_POOL" \
+        --broadcast \
         2>&1)
 
     echo "$OUTPUT"

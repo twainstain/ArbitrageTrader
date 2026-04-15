@@ -1,4 +1,4 @@
-"""On-chain result verifier — extracts actual profit from transaction receipts.
+"""On-chain result verifier — extracts structured realized PnL from receipts.
 
 Implements the ResultVerifier protocol from lifecycle.py.
 Verifies that a submitted transaction was included, checks for reverts,
@@ -7,29 +7,48 @@ extracts gas used, and calculates actual profit from on-chain state.
 Usage::
 
     verifier = OnChainVerifier(w3, contract_address, quote_decimals=6)
-    included, reverted, gas_used, actual_profit = verifier.verify(tx_hash)
+    result = verifier.verify(tx_hash)
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from decimal import Decimal
 from typing import Optional
 
 from web3 import Web3
+
+from models import Opportunity
 
 D = Decimal
 logger = logging.getLogger(__name__)
 
 # ERC-20 Transfer event signature: Transfer(address,address,uint256)
 TRANSFER_EVENT_TOPIC = Web3.keccak(text="Transfer(address,address,uint256)").hex()
+PROFIT_REALIZED_EVENT_TOPIC = Web3.keccak(
+    text="ProfitRealized(address,uint256,uint256)"
+).hex()
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    included: bool
+    reverted: bool
+    gas_used: int
+    realized_profit_quote: Decimal = D("0")
+    gas_cost_base: Decimal = D("0")
+    actual_profit_base: Decimal = D("0")
+    block_number: int = 0
+    profit_currency: str = ""
 
 
 class OnChainVerifier:
-    """Verify on-chain transaction results and extract actual profit.
+    """Verify on-chain transaction results and extract realized PnL fields.
 
     Checks tx receipt for inclusion/revert, calculates gas cost,
-    and extracts profit from Transfer events to the contract address.
+    extracts realized quote-token profit, and only computes base-unit
+    net profit when an opportunity context makes that conversion safe.
     """
 
     def __init__(
@@ -44,50 +63,90 @@ class OnChainVerifier:
         self.quote_decimals = quote_decimals
         self.timeout = timeout
 
-    def verify(self, tx_hash: str) -> tuple[bool, bool, int, Decimal]:
-        """Verify a transaction and return (included, reverted, gas_used, actual_profit).
+    def verify(
+        self,
+        tx_hash: str,
+        opportunity: Opportunity | None = None,
+    ) -> VerificationResult:
+        """Verify a transaction and return structured realized-PnL fields.
 
         - included: True if the tx was mined in a block
         - reverted: True if the tx reverted (status=0)
         - gas_used: actual gas consumed
-        - actual_profit: profit extracted from Transfer events (in base units)
+        - realized_profit_quote: raw realized profit in the quote token
+        - gas_cost_base: gas cost in the chain's base gas asset
+        - actual_profit_base: realized net profit in base units only when
+          opportunity context is provided and conversion is safe
         """
         try:
             receipt = self.w3.eth.get_transaction_receipt(tx_hash)
         except Exception as exc:
             logger.warning("Could not fetch receipt for %s: %s", tx_hash, exc)
-            return False, False, 0, D("0")
+            return VerificationResult(False, False, 0)
 
         if receipt is None:
-            return False, False, 0, D("0")
+            return VerificationResult(False, False, 0)
 
         included = receipt["blockNumber"] > 0
         reverted = receipt["status"] == 0
         gas_used = receipt["gasUsed"]
+        block_number = int(receipt.get("blockNumber") or 0)
 
         if reverted or not included:
-            return included, reverted, gas_used, D("0")
+            return VerificationResult(
+                included=included,
+                reverted=reverted,
+                gas_used=gas_used,
+                block_number=block_number,
+            )
 
-        # Extract profit from Transfer events to the contract.
-        actual_profit = self._extract_profit(receipt)
-
-        # Subtract gas cost (in ETH, converted to base units).
-        gas_cost = self._calculate_gas_cost(receipt)
-        net_profit = actual_profit - gas_cost
+        profit_quote = self._extract_profit(receipt)
+        gas_cost_base = self._calculate_gas_cost(receipt)
+        profit_currency = ""
+        actual_profit_base = D("0")
+        if opportunity is not None and opportunity.trade_size > D("0"):
+            quote_per_base = opportunity.cost_to_buy_quote / opportunity.trade_size
+            if quote_per_base > D("0"):
+                actual_profit_base = (profit_quote / quote_per_base) - gas_cost_base
+            pair_parts = opportunity.pair.split("/", 1)
+            if len(pair_parts) == 2:
+                profit_currency = pair_parts[1]
 
         logger.info(
-            "Verified %s: included=%s gas=%d profit=%s gas_cost=%s net=%s",
-            tx_hash, included, gas_used, actual_profit, gas_cost, net_profit,
+            "Verified %s: included=%s gas=%d profit_quote=%s gas_cost_base=%s actual_base=%s",
+            tx_hash, included, gas_used, profit_quote, gas_cost_base, actual_profit_base,
         )
-        return included, reverted, gas_used, net_profit
+        return VerificationResult(
+            included=included,
+            reverted=reverted,
+            gas_used=gas_used,
+            realized_profit_quote=profit_quote,
+            gas_cost_base=gas_cost_base,
+            actual_profit_base=actual_profit_base,
+            block_number=block_number,
+            profit_currency=profit_currency,
+        )
 
     def _extract_profit(self, receipt: dict) -> Decimal:
-        """Extract profit from ERC-20 Transfer events in the receipt.
+        """Extract profit from ProfitRealized or legacy ERC-20 Transfer events.
 
-        Looks for Transfer events TO the contract address (profit transfers).
-        The flash loan contract transfers profit to itself, then to the owner.
-        We look for the final outgoing transfer from the contract.
+        Prefers the explicit ProfitRealized event emitted by the executor
+        contract. Falls back to legacy Transfer logs for backward
+        compatibility with already-deployed contracts.
         """
+        for log_entry in receipt.get("logs", []):
+            topics = log_entry.get("topics", [])
+            if not topics:
+                continue
+            topic_hex = topics[0].hex() if isinstance(topics[0], bytes) else topics[0]
+            if topic_hex != PROFIT_REALIZED_EVENT_TOPIC:
+                continue
+            data_hex = log_entry["data"].hex() if isinstance(log_entry["data"], bytes) else log_entry["data"].replace("0x", "")
+            if len(data_hex) >= 128:
+                # Event data packs: profit, totalOwed
+                profit_raw = int(data_hex[:64], 16)
+                return D(profit_raw) / D(10 ** self.quote_decimals)
+
         profit = D("0")
         contract_lower = self.contract_address.lower()
 
@@ -104,11 +163,10 @@ class OnChainVerifier:
             if len(topics) < 3:
                 continue
 
-            # Transfer(from, to, amount) — `to` is topics[2].
-            to_addr = "0x" + (topics[2].hex() if isinstance(topics[2], bytes) else topics[2])[-40:]
-
-            if to_addr.lower() == contract_lower:
-                # Incoming transfer to contract — this is repayment or swap output.
+            from_addr = "0x" + (topics[1].hex() if isinstance(topics[1], bytes) else topics[1])[-40:]
+            if from_addr.lower() == contract_lower:
+                # Legacy fallback: outgoing transfer from contract, which is a
+                # closer proxy for realized payout than incoming loan/swap flows.
                 raw_amount = int(log_entry["data"].hex() if isinstance(log_entry["data"], bytes) else log_entry["data"], 16)
                 profit += D(raw_amount) / D(10 ** self.quote_decimals)
 

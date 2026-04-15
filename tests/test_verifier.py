@@ -9,6 +9,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from pipeline.verifier import OnChainVerifier, PnLReconciler
+from models import Opportunity
 
 D = Decimal
 
@@ -46,6 +47,18 @@ def _make_transfer_log(from_addr: str, to_addr: str, amount_raw: int) -> dict:
     }
 
 
+def _make_profit_log(quote_token: str, amount_raw: int, total_owed_raw: int = 0) -> dict:
+    from web3 import Web3
+
+    topic0 = Web3.keccak(text="ProfitRealized(address,uint256,uint256)")
+    quote_topic = bytes.fromhex(quote_token.lower().replace("0x", "").zfill(64))
+    data = amount_raw.to_bytes(32, "big") + total_owed_raw.to_bytes(32, "big")
+    return {
+        "topics": [topic0, quote_topic],
+        "data": data,
+    }
+
+
 class OnChainVerifierTests(unittest.TestCase):
     def setUp(self):
         self.w3 = MagicMock()
@@ -58,35 +71,35 @@ class OnChainVerifierTests(unittest.TestCase):
         receipt = _make_receipt(status=1, gas_used=150_000)
         self.w3.eth.get_transaction_receipt.return_value = receipt
 
-        included, reverted, gas_used, profit = self.verifier.verify("0xabc")
-        self.assertTrue(included)
-        self.assertFalse(reverted)
-        self.assertEqual(gas_used, 150_000)
+        result = self.verifier.verify("0xabc")
+        self.assertTrue(result.included)
+        self.assertFalse(result.reverted)
+        self.assertEqual(result.gas_used, 150_000)
 
     def test_reverted_transaction(self):
         receipt = _make_receipt(status=0, gas_used=21_000)
         self.w3.eth.get_transaction_receipt.return_value = receipt
 
-        included, reverted, gas_used, profit = self.verifier.verify("0xdef")
-        self.assertTrue(included)
-        self.assertTrue(reverted)
-        self.assertEqual(profit, D("0"))
+        result = self.verifier.verify("0xdef")
+        self.assertTrue(result.included)
+        self.assertTrue(result.reverted)
+        self.assertEqual(result.actual_profit_base, D("0"))
 
     def test_receipt_not_found(self):
         self.w3.eth.get_transaction_receipt.return_value = None
 
-        included, reverted, gas_used, profit = self.verifier.verify("0x000")
-        self.assertFalse(included)
-        self.assertFalse(reverted)
-        self.assertEqual(gas_used, 0)
-        self.assertEqual(profit, D("0"))
+        result = self.verifier.verify("0x000")
+        self.assertFalse(result.included)
+        self.assertFalse(result.reverted)
+        self.assertEqual(result.gas_used, 0)
+        self.assertEqual(result.actual_profit_base, D("0"))
 
     def test_receipt_fetch_error(self):
         self.w3.eth.get_transaction_receipt.side_effect = Exception("RPC down")
 
-        included, reverted, gas_used, profit = self.verifier.verify("0xfail")
-        self.assertFalse(included)
-        self.assertEqual(profit, D("0"))
+        result = self.verifier.verify("0xfail")
+        self.assertFalse(result.included)
+        self.assertEqual(result.actual_profit_base, D("0"))
 
     def test_extracts_profit_from_transfer_logs(self):
         # Transfer 100 USDC (6 decimals) to the contract.
@@ -102,23 +115,89 @@ class OnChainVerifierTests(unittest.TestCase):
         )
         self.w3.eth.get_transaction_receipt.return_value = receipt
 
-        included, reverted, gas_used, profit = self.verifier.verify("0xprofit")
-        self.assertTrue(included)
-        self.assertEqual(gas_used, 200_000)
-        self.assertEqual(profit, D("100"))
+        result = self.verifier.verify("0xprofit")
+        self.assertTrue(result.included)
+        self.assertEqual(result.gas_used, 200_000)
+        self.assertEqual(result.realized_profit_quote, D("0"))
 
-    def test_gas_cost_subtracted_from_profit(self):
+    def test_prefers_profit_event_when_present(self):
+        log = _make_profit_log(
+            quote_token="0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            amount_raw=125_000_000,
+        )
         receipt = _make_receipt(
-            status=1, gas_used=100_000,
-            effective_gas_price=50_000_000_000,  # 50 gwei
-            logs=[],
+            status=1, gas_used=200_000,
+            effective_gas_price=0,
+            logs=[log],
         )
         self.w3.eth.get_transaction_receipt.return_value = receipt
 
-        included, reverted, gas_used, profit = self.verifier.verify("0xgas")
-        # Gas cost = 100_000 * 50 gwei = 5_000_000 gwei = 0.005 ETH
-        expected_gas_cost = D("100000") * D("50000000000") / D(10**18)
-        self.assertEqual(profit, -expected_gas_cost)
+        result = self.verifier.verify("0xprofit_event")
+        self.assertTrue(result.included)
+        self.assertEqual(result.realized_profit_quote, D("125"))
+
+    def test_opportunity_context_converts_quote_profit_to_base_and_subtracts_gas(self):
+        log = _make_profit_log(
+            quote_token="0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            amount_raw=100_000_000,  # 100 USDC
+        )
+        receipt = _make_receipt(
+            status=1, gas_used=100_000,
+            effective_gas_price=50_000_000_000,  # 0.005 ETH gas
+            logs=[log],
+        )
+        self.w3.eth.get_transaction_receipt.return_value = receipt
+
+        opp = Opportunity(
+            pair="WETH/USDC",
+            buy_dex="Uni",
+            sell_dex="Sushi",
+            trade_size=D("1"),
+            cost_to_buy_quote=D("2000"),
+            proceeds_from_sell_quote=D("2100"),
+            gross_profit_quote=D("100"),
+            net_profit_quote=D("80"),
+            net_profit_base=D("0.04"),
+        )
+
+        result = self.verifier.verify("0xwithopp", opp)
+        self.assertTrue(result.included)
+        # 100 USDC / 2000 USDC-per-WETH = 0.05 WETH, minus 0.005 gas = 0.045
+        self.assertEqual(result.realized_profit_quote, D("100"))
+        self.assertEqual(result.gas_cost_base, D("0.005"))
+        self.assertEqual(result.actual_profit_base, D("0.045"))
+
+    def test_without_opportunity_context_profit_stays_in_quote_units(self):
+        receipt = _make_receipt(
+            status=1, gas_used=100_000,
+            effective_gas_price=50_000_000_000,  # 50 gwei
+            logs=[_make_profit_log(
+                quote_token="0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                amount_raw=100_000_000,
+            )],
+        )
+        self.w3.eth.get_transaction_receipt.return_value = receipt
+
+        result = self.verifier.verify("0xgas")
+        self.assertEqual(result.realized_profit_quote, D("100"))
+        self.assertEqual(result.actual_profit_base, D("0"))
+
+    def test_fallback_transfer_uses_outgoing_transfer_from_contract(self):
+        log = _make_transfer_log(
+            from_addr=self.contract,
+            to_addr="0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            amount_raw=25_000_000,
+        )
+        receipt = _make_receipt(
+            status=1,
+            gas_used=100_000,
+            effective_gas_price=0,
+            logs=[log],
+        )
+        self.w3.eth.get_transaction_receipt.return_value = receipt
+
+        result = self.verifier.verify("0xlegacy")
+        self.assertEqual(result.realized_profit_quote, D("25"))
 
 
 class PnLReconcilerTests(unittest.TestCase):

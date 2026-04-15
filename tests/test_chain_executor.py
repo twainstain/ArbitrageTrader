@@ -13,6 +13,12 @@ from chain_executor import (
     SWAP_ROUTERS,
     AAVE_V3_POOL,
     EXECUTOR_ABI,
+    VELO_FACTORIES,
+    SUPPORTED_LIVE_DEX_TYPES,
+    SWAP_TYPE_V3,
+    SWAP_TYPE_VELO,
+    V3_DEX_TYPES,
+    VELO_DEX_TYPES,
 )
 from config import BotConfig, DexConfig
 from models import Opportunity
@@ -262,9 +268,57 @@ class DynamicPairResolutionTests(unittest.TestCase):
             self.assertEqual(result.reason, "cross_chain_execution_not_supported")
 
 
-class SolidlyExecutionGuardTests(unittest.TestCase):
+class VelodromeExecutionTests(unittest.TestCase):
+    """Tests for Velodrome/Aerodrome (Solidly-fork) execution support."""
+
+    def test_velodrome_in_supported_types(self) -> None:
+        self.assertIn("velodrome_v2", SUPPORTED_LIVE_DEX_TYPES)
+        self.assertIn("aerodrome", SUPPORTED_LIVE_DEX_TYPES)
+
+    def test_velo_dex_types_classification(self) -> None:
+        self.assertIn("velodrome_v2", VELO_DEX_TYPES)
+        self.assertIn("aerodrome", VELO_DEX_TYPES)
+        self.assertNotIn("uniswap_v3", VELO_DEX_TYPES)
+
+    def test_v3_dex_types_classification(self) -> None:
+        self.assertIn("uniswap_v3", V3_DEX_TYPES)
+        self.assertIn("sushi_v3", V3_DEX_TYPES)
+        self.assertNotIn("velodrome_v2", V3_DEX_TYPES)
+
+    def test_swap_type_constants(self) -> None:
+        self.assertEqual(SWAP_TYPE_V3, 0)
+        self.assertEqual(SWAP_TYPE_VELO, 1)
+
+    def test_optimism_has_velodrome_router(self) -> None:
+        routers = SWAP_ROUTERS.get("optimism", {})
+        self.assertIn("velodrome_v2", routers)
+        self.assertTrue(routers["velodrome_v2"].startswith("0x"))
+
+    def test_base_has_aerodrome_router(self) -> None:
+        routers = SWAP_ROUTERS.get("base", {})
+        self.assertIn("aerodrome", routers)
+
+    def test_optimism_has_velodrome_factory(self) -> None:
+        factories = VELO_FACTORIES.get("optimism", {})
+        self.assertIn("velodrome_v2", factories)
+        self.assertTrue(factories["velodrome_v2"].startswith("0x"))
+
+    def test_base_has_aerodrome_factory(self) -> None:
+        factories = VELO_FACTORIES.get("base", {})
+        self.assertIn("aerodrome", factories)
+
+    def test_optimism_has_aave_pool(self) -> None:
+        self.assertIn("optimism", AAVE_V3_POOL)
+
+    def test_executor_abi_has_new_fields(self) -> None:
+        """ABI must include swapTypeA/B, factoryA/B, stableA/B."""
+        func = EXECUTOR_ABI[0]
+        param_names = [c["name"] for c in func["inputs"][0]["components"]]
+        for field in ["swapTypeA", "swapTypeB", "factoryA", "factoryB", "stableA", "stableB"]:
+            self.assertIn(field, param_names, f"Missing ABI field: {field}")
+
     @patch("chain_executor.Web3")
-    def test_resolve_router_rejects_velodrome(self, mock_web3_cls) -> None:
+    def test_resolve_router_finds_velodrome(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
         mock_web3_cls.HTTPProvider = MagicMock()
@@ -272,10 +326,10 @@ class SolidlyExecutionGuardTests(unittest.TestCase):
         mock_w3.eth.account.from_key.return_value = MagicMock(address="0xfake")
 
         config = BotConfig(
-            pair="OP/USDC", base_asset="OP", quote_asset="USDC",
-            trade_size=250.0, min_profit_base=0.001, estimated_gas_cost_base=0.002,
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=0.1, min_profit_base=0.001, estimated_gas_cost_base=0.0001,
             flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
-            slippage_bps=15.0, poll_interval_seconds=0.0,
+            slippage_bps=30.0, poll_interval_seconds=0.0,
             dexes=[
                 DexConfig(name="Velodrome-Optimism", base_price=0, fee_bps=20.0,
                           volatility_bps=0, chain="optimism", dex_type="velodrome_v2"),
@@ -290,12 +344,11 @@ class SolidlyExecutionGuardTests(unittest.TestCase):
             "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
         }):
             executor = ChainExecutor(config)
-            with self.assertRaises(ChainExecutorError) as ctx:
-                executor._resolve_router("Velodrome-Optimism")
-            self.assertIn("only supports V3", str(ctx.exception))
+            router = executor._resolve_router("Velodrome-Optimism")
+            self.assertEqual(router, SWAP_ROUTERS["optimism"]["velodrome_v2"])
 
     @patch("chain_executor.Web3")
-    def test_resolve_router_rejects_aerodrome(self, mock_web3_cls) -> None:
+    def test_resolve_velo_factory(self, mock_web3_cls) -> None:
         mock_w3 = MagicMock()
         mock_web3_cls.return_value = mock_w3
         mock_web3_cls.HTTPProvider = MagicMock()
@@ -304,14 +357,14 @@ class SolidlyExecutionGuardTests(unittest.TestCase):
 
         config = BotConfig(
             pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
-            trade_size=1.0, min_profit_base=0.001, estimated_gas_cost_base=0.002,
+            trade_size=0.1, min_profit_base=0.001, estimated_gas_cost_base=0.0001,
             flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
-            slippage_bps=15.0, poll_interval_seconds=0.0,
+            slippage_bps=30.0, poll_interval_seconds=0.0,
             dexes=[
-                DexConfig(name="Aerodrome-Base", base_price=0, fee_bps=20.0,
-                          volatility_bps=0, chain="base", dex_type="aerodrome"),
-                DexConfig(name="Uniswap-Base", base_price=0, fee_bps=5.0,
-                          volatility_bps=0, chain="base", dex_type="uniswap_v3"),
+                DexConfig(name="Velodrome-Optimism", base_price=0, fee_bps=20.0,
+                          volatility_bps=0, chain="optimism", dex_type="velodrome_v2"),
+                DexConfig(name="Uniswap-Optimism", base_price=0, fee_bps=5.0,
+                          volatility_bps=0, chain="optimism", dex_type="uniswap_v3"),
             ],
         )
         config.validate()
@@ -321,9 +374,141 @@ class SolidlyExecutionGuardTests(unittest.TestCase):
             "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
         }):
             executor = ChainExecutor(config)
-            with self.assertRaises(ChainExecutorError) as ctx:
-                executor._resolve_router("Aerodrome-Base")
-            self.assertIn("only supports V3", str(ctx.exception))
+            factory = executor._resolve_velo_factory("Velodrome-Optimism")
+            self.assertEqual(factory, VELO_FACTORIES["optimism"]["velodrome_v2"])
+
+    @patch("chain_executor.Web3")
+    def test_supports_live_execution_accepts_velo_v3_mix(self, mock_web3_cls) -> None:
+        """A Velodrome buy + V3 sell should be supported."""
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        mock_w3.eth.account.from_key.return_value = MagicMock(address="0xfake")
+
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=0.1, min_profit_base=0.001, estimated_gas_cost_base=0.0001,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=30.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="Velodrome-Optimism", base_price=0, fee_bps=20.0,
+                          volatility_bps=0, chain="optimism", dex_type="velodrome_v2"),
+                DexConfig(name="Uniswap-Optimism", base_price=0, fee_bps=5.0,
+                          volatility_bps=0, chain="optimism", dex_type="uniswap_v3"),
+            ],
+        )
+        config.validate()
+
+        with patch.dict("os.environ", {
+            "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+            "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
+        }):
+            executor = ChainExecutor(config)
+
+        opp = Opportunity(
+            pair="WETH/USDC", buy_dex="Velodrome-Optimism", sell_dex="Uniswap-Optimism",
+            trade_size=0.1, cost_to_buy_quote=230.0,
+            proceeds_from_sell_quote=234.0, gross_profit_quote=4.0,
+            net_profit_quote=3.0, net_profit_base=0.0013,
+        )
+        supported, reason = executor._supports_live_execution(opp)
+        self.assertTrue(supported)
+        self.assertEqual(reason, "ok")
+
+    @patch("chain_executor.Web3")
+    def test_build_transaction_with_velodrome(self, mock_web3_cls) -> None:
+        """_build_transaction should pass correct swap types for Velo+V3 mix."""
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        mock_w3.eth.account.from_key.return_value = MagicMock(address="0xfake")
+        mock_w3.eth.get_transaction_count.return_value = 0
+        mock_w3.eth.gas_price = 1_000_000
+        mock_w3.to_wei = lambda v, u: v * 1_000_000_000
+
+        mock_contract = MagicMock()
+        mock_contract.functions.executeArbitrage.return_value.build_transaction.return_value = {
+            "data": "0x", "from": "0xfake", "to": "0xcontract"
+        }
+        mock_w3.eth.contract.return_value = mock_contract
+
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=0.1, min_profit_base=0.001, estimated_gas_cost_base=0.0001,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=30.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="Velodrome-Optimism", base_price=0, fee_bps=20.0,
+                          volatility_bps=0, chain="optimism", dex_type="velodrome_v2"),
+                DexConfig(name="Uniswap-Optimism", base_price=0, fee_bps=5.0,
+                          volatility_bps=0, chain="optimism", dex_type="uniswap_v3"),
+            ],
+        )
+        config.validate()
+
+        with patch.dict("os.environ", {
+            "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+            "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
+        }):
+            executor = ChainExecutor(config)
+
+        opp = Opportunity(
+            pair="WETH/USDC", buy_dex="Velodrome-Optimism", sell_dex="Uniswap-Optimism",
+            trade_size=0.1, cost_to_buy_quote=230.0,
+            proceeds_from_sell_quote=234.0, gross_profit_quote=4.0,
+            net_profit_quote=3.0, net_profit_base=0.0013,
+        )
+        executor._build_transaction(opp)
+
+        params = mock_contract.functions.executeArbitrage.call_args[0][0]
+        # swapTypeA=1 (Velo), swapTypeB=0 (V3)
+        self.assertEqual(params[8], SWAP_TYPE_VELO)   # swapTypeA
+        self.assertEqual(params[9], SWAP_TYPE_V3)     # swapTypeB
+        # factoryA should be Velodrome factory
+        self.assertEqual(params[10], VELO_FACTORIES["optimism"]["velodrome_v2"])
+        # stableA=False, stableB=False
+        self.assertFalse(params[12])
+        self.assertFalse(params[13])
+
+    @patch("chain_executor.Web3")
+    def test_curve_still_unsupported(self, mock_web3_cls) -> None:
+        """Curve should still be rejected."""
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        mock_w3.eth.account.from_key.return_value = MagicMock(address="0xfake")
+
+        config = BotConfig(
+            pair="USDT/USDC", base_asset="USDT", quote_asset="USDC",
+            trade_size=1000.0, min_profit_base=0.001, estimated_gas_cost_base=0.002,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=15.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="Curve-Ethereum", base_price=0, fee_bps=1.0,
+                          volatility_bps=0, chain="ethereum", dex_type="curve"),
+                DexConfig(name="Uniswap-Ethereum", base_price=0, fee_bps=5.0,
+                          volatility_bps=0, chain="ethereum", dex_type="uniswap_v3"),
+            ],
+        )
+        config.validate()
+
+        with patch.dict("os.environ", {
+            "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+            "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
+        }):
+            executor = ChainExecutor(config)
+            opp = Opportunity(
+                pair="USDT/USDC", buy_dex="Curve-Ethereum", sell_dex="Uniswap-Ethereum",
+                trade_size=1000.0, cost_to_buy_quote=1000.0,
+                proceeds_from_sell_quote=1001.0, gross_profit_quote=1.0,
+                net_profit_quote=0.5, net_profit_base=0.0002,
+            )
+            supported, reason = executor._supports_live_execution(opp)
+            self.assertFalse(supported)
+            self.assertIn("curve", reason)
 
 
 class GasEstimationTests(unittest.TestCase):

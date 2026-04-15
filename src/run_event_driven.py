@@ -24,6 +24,7 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import signal
@@ -49,6 +50,7 @@ from persistence.db import init_db
 from persistence.repository import Repository
 from pipeline.lifecycle import CandidatePipeline
 from pipeline.queue import CandidateQueue
+from pipeline.verifier import OnChainVerifier, VerificationResult
 from registry.monitored_pools import sync_monitored_pools
 from risk.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
 from risk.policy import RiskPolicy
@@ -73,6 +75,174 @@ def _build_pair_list(config: BotConfig) -> list[PairConfig]:
     if config.extra_pairs:
         pairs.extend(config.extra_pairs)
     return pairs
+
+
+class ChainExecutorSimulator:
+    """Pipeline simulator adapter backed by ChainExecutor's eth_call preflight."""
+
+    def __init__(self, executor: "ChainExecutor") -> None:
+        self.executor = executor
+
+    def simulate(self, opportunity: Opportunity) -> tuple[bool, str]:
+        tx_data = self.executor._build_transaction(opportunity)
+        return self.executor._simulate_transaction(tx_data)
+
+
+class OpportunityAwareVerifier:
+    """Verifier adapter that keeps opportunity context for tx-level PnL conversion."""
+
+    def __init__(self, executor: "ChainExecutor") -> None:
+        self.executor = executor
+        self._opps_by_tx: dict[str, Opportunity] = {}
+
+    def remember_submission(self, tx_hash: str, opportunity: Opportunity) -> None:
+        self._opps_by_tx[tx_hash] = opportunity
+
+    def verify(self, tx_hash: str) -> VerificationResult:
+        from tokens import token_decimals
+
+        opp = self._opps_by_tx.get(tx_hash)
+        quote_asset = opp.pair.split("/", 1)[1] if opp and "/" in opp.pair else self.executor.config.quote_asset
+        verifier = OnChainVerifier(
+            w3=self.executor.w3,
+            contract_address=self.executor.contract_address,
+            quote_decimals=token_decimals(quote_asset),
+        )
+        return verifier.verify(tx_hash, opp)
+
+
+class ChainExecutorSubmitter:
+    """Pipeline submitter adapter backed by ChainExecutor broadcast logic."""
+
+    def __init__(
+        self,
+        executor: "ChainExecutor",
+        verifier: OpportunityAwareVerifier | None = None,
+    ) -> None:
+        self.executor = executor
+        self.verifier = verifier
+
+    def submit(self, opportunity: Opportunity) -> tuple[str, str, int]:
+        tx_data = self.executor._build_transaction(opportunity)
+        tx_hash = self.executor._sign_and_send(tx_data)
+        tx_hash_hex = tx_hash.hex()
+        if self.verifier is not None:
+            self.verifier.remember_submission(tx_hash_hex, opportunity)
+        target_block = self.executor.w3.eth.block_number + 1 if self.executor.use_flashbots else 0
+        bundle_id = f"flashbots:{target_block}" if self.executor.use_flashbots else ""
+        return tx_hash_hex, bundle_id, target_block
+
+
+def build_execution_stack(
+    config: BotConfig,
+) -> tuple[ChainExecutorSimulator | None, ChainExecutorSubmitter | None, OpportunityAwareVerifier | None]:
+    """Build live execution adapters when executor env/config are available."""
+    if not (os.environ.get("EXECUTOR_PRIVATE_KEY") and os.environ.get("EXECUTOR_CONTRACT")):
+        logger.info("Live execution stack not configured — missing EXECUTOR_PRIVATE_KEY or EXECUTOR_CONTRACT")
+        return None, None, None
+
+    try:
+        from chain_executor import ChainExecutor
+
+        executor = ChainExecutor(config)
+        verifier = OpportunityAwareVerifier(executor)
+        simulator = ChainExecutorSimulator(executor)
+        submitter = ChainExecutorSubmitter(executor, verifier=verifier)
+        logger.info("Live execution stack ready: simulator + submitter + verifier wired")
+        return simulator, submitter, verifier
+    except Exception as exc:
+        logger.warning("Live execution stack unavailable: %s", exc)
+        return None, None, None
+
+
+def compute_live_execution_summary(config: BotConfig) -> dict[str, object]:
+    """Summarize what part of the config is truly executable live today."""
+    from chain_executor import SUPPORTED_LIVE_DEX_TYPES
+
+    executable_dexes = [
+        dex for dex in config.dexes
+        if dex.chain and dex.dex_type in SUPPORTED_LIVE_DEX_TYPES
+    ]
+    executable_chains = sorted({dex.chain for dex in executable_dexes if dex.chain})
+    executable_dex_names = [dex.name for dex in executable_dexes]
+    rollout_target = "arbitrum" if "arbitrum" in executable_chains else (executable_chains[0] if executable_chains else "")
+    return {
+        "executable_chains": executable_chains,
+        "executable_dex_names": executable_dex_names,
+        "rollout_target": rollout_target,
+    }
+
+
+def assess_launch_readiness(
+    config: BotConfig,
+    *,
+    live_stack_ready: bool,
+    target_chain: str = "arbitrum",
+) -> dict[str, object]:
+    """Check whether the current config/env is ready for a narrow live rollout."""
+    from chain_executor import AAVE_V3_POOL, SUPPORTED_LIVE_DEX_TYPES, SWAP_ROUTERS
+
+    rpc_overrides = get_rpc_overrides()
+    executor_key_configured = bool(os.environ.get("EXECUTOR_PRIVATE_KEY"))
+    executor_contract_configured = bool(os.environ.get("EXECUTOR_CONTRACT"))
+    dedicated_rpc_configured = bool(rpc_overrides.get(target_chain))
+
+    blockers: list[str] = []
+    target_dexes = [dex for dex in config.dexes if (dex.chain or "").lower() == target_chain]
+    off_target_dexes = [dex.name for dex in config.dexes if (dex.chain or "").lower() != target_chain]
+    unsupported_target_dexes = [
+        dex.name for dex in target_dexes if dex.dex_type not in SUPPORTED_LIVE_DEX_TYPES
+    ]
+    off_target_pairs = [
+        pair.pair for pair in (config.extra_pairs or [])
+        if pair.chain and pair.chain.lower() != target_chain
+    ]
+
+    if not target_dexes:
+        blockers.append(f"no_{target_chain}_dexes_configured")
+    if off_target_dexes:
+        blockers.append(f"off_target_dexes:{','.join(off_target_dexes)}")
+    if unsupported_target_dexes:
+        blockers.append(f"unsupported_dexes:{','.join(unsupported_target_dexes)}")
+    if off_target_pairs:
+        blockers.append(f"off_target_pairs:{','.join(off_target_pairs)}")
+    if not executor_key_configured:
+        blockers.append("missing_executor_private_key")
+    if not executor_contract_configured:
+        blockers.append("missing_executor_contract")
+    if not dedicated_rpc_configured:
+        blockers.append(f"missing_rpc_{target_chain}")
+    if target_chain not in AAVE_V3_POOL:
+        blockers.append(f"missing_aave_pool:{target_chain}")
+    if target_chain not in SWAP_ROUTERS:
+        blockers.append(f"missing_swap_router_registry:{target_chain}")
+    if not live_stack_ready:
+        blockers.append("live_stack_unavailable")
+
+    return {
+        "launch_chain": target_chain,
+        "launch_ready": not blockers,
+        "launch_blockers": blockers,
+        "executor_key_configured": executor_key_configured,
+        "executor_contract_configured": executor_contract_configured,
+        "rpc_configured": dedicated_rpc_configured,
+        "configured_dex_count": len(target_dexes),
+    }
+
+
+def enforce_safe_execution_mode(
+    risk_policy: RiskPolicy,
+    launch_readiness: dict[str, object],
+) -> bool:
+    """Force simulation mode when startup readiness is not satisfied."""
+    if risk_policy.execution_enabled and not bool(launch_readiness.get("launch_ready")):
+        risk_policy.execution_enabled = False
+        logger.warning(
+            "Execution forced to simulation mode: launch not ready (%s)",
+            ", ".join(launch_readiness.get("launch_blockers", [])) or "unknown",
+        )
+        return False
+    return bool(risk_policy.execution_enabled)
 
 
 class PipelineConsumer:
@@ -196,9 +366,15 @@ class PipelineConsumer:
                         actual_profit=float(result.net_profit),
                     )
                     self.breaker.record_execution_success()
+            elif result.final_status == "submitted":
+                self.metrics.record_execution_submitted()
             elif result.final_status == "reverted":
+                self.metrics.record_execution_submitted()
                 self.breaker.record_revert()
                 self.metrics.record_execution_result(included=True, reverted=True)
+            elif result.final_status == "not_included":
+                self.metrics.record_execution_submitted()
+                self.metrics.record_execution_result(included=False, reverted=False)
 
             # Smart alerting.
             self.alerter.check_opportunity(
@@ -207,6 +383,7 @@ class PipelineConsumer:
                 chain=opp.chain, net_profit=float(opp.net_profit_base),
             )
             self.alerter.maybe_send_hourly()
+            self.alerter.maybe_send_daily()
 
 
 class EventDrivenScanner:
@@ -430,7 +607,46 @@ def main() -> None:
     ))
 
     # --- Pipeline ---
-    pipeline = CandidatePipeline(repo=repo, risk_policy=risk_policy)
+    simulator, submitter, verifier = build_execution_stack(config)
+    live_summary = compute_live_execution_summary(config)
+    launch_readiness = assess_launch_readiness(
+        config,
+        live_stack_ready=submitter is not None,
+        target_chain=str(live_summary["rollout_target"] or "arbitrum"),
+    )
+    repo.set_checkpoint("live_stack_ready", "1" if submitter is not None else "0")
+    repo.set_checkpoint("live_executable_chains", ",".join(live_summary["executable_chains"]))  # type: ignore[arg-type]
+    repo.set_checkpoint("live_executable_dexes", ",".join(live_summary["executable_dex_names"]))  # type: ignore[arg-type]
+    repo.set_checkpoint("live_rollout_target", str(live_summary["rollout_target"]))
+    repo.set_checkpoint("launch_chain", str(launch_readiness["launch_chain"]))
+    repo.set_checkpoint("launch_ready", "1" if launch_readiness["launch_ready"] else "0")
+    repo.set_checkpoint("launch_blockers", json.dumps(launch_readiness["launch_blockers"]))
+    repo.set_checkpoint("executor_key_configured", "1" if launch_readiness["executor_key_configured"] else "0")
+    repo.set_checkpoint(
+        "executor_contract_configured",
+        "1" if launch_readiness["executor_contract_configured"] else "0",
+    )
+    repo.set_checkpoint("rpc_configured", "1" if launch_readiness["rpc_configured"] else "0")
+    enforce_safe_execution_mode(risk_policy, launch_readiness)
+    pipeline = CandidatePipeline(
+        repo=repo,
+        risk_policy=risk_policy,
+        simulator=simulator,
+        submitter=submitter,
+        verifier=verifier,
+    )
+    logger.info(
+        "Live execution readiness: stack=%s target=%s chains=%s",
+        "ready" if submitter is not None else "simulation_only",
+        live_summary["rollout_target"] or "none",
+        ", ".join(live_summary["executable_chains"]) or "none",
+    )
+    logger.info(
+        "Launch readiness: chain=%s ready=%s blockers=%s",
+        launch_readiness["launch_chain"],
+        "yes" if launch_readiness["launch_ready"] else "no",
+        ", ".join(launch_readiness["launch_blockers"]) or "none",
+    )
 
     # --- Alerting ---
     telegram = TelegramAlert()
@@ -444,7 +660,19 @@ def main() -> None:
     if dispatcher.backend_count == 0:
         logger.warning("Alerting: no backends configured")
 
-    dashboard_url = os.environ.get("DASHBOARD_URL", f"http://localhost:{args.port}/dashboard")
+    dashboard_url = os.environ.get("DASHBOARD_URL", "")
+    if not dashboard_url:
+        # Auto-detect LAN IP so email links work from any device on the network.
+        try:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            lan_ip = s.getsockname()[0]
+            s.close()
+            dashboard_url = f"http://{lan_ip}:{args.port}/dashboard"
+        except Exception:
+            dashboard_url = f"http://localhost:{args.port}/dashboard"
+        logger.info("Dashboard URL (auto-detected): %s", dashboard_url)
     alerter = SmartAlerter(repo=repo, telegram=telegram, discord=discord, gmail=gmail, dashboard_url=dashboard_url)
     alerter.start_background_hourly()
 

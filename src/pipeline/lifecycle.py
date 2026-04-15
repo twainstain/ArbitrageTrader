@@ -18,6 +18,7 @@ from typing import Protocol
 from alerting.dispatcher import AlertDispatcher
 from models import ZERO, MarketQuote, Opportunity
 from persistence.repository import Repository
+from pipeline.verifier import VerificationResult
 from risk.policy import RiskPolicy, RiskVerdict
 
 D = Decimal
@@ -38,8 +39,8 @@ class Submitter(Protocol):
 
 class ResultVerifier(Protocol):
     """Protocol for verifying on-chain results."""
-    def verify(self, tx_hash: str) -> tuple[bool, bool, int, Decimal]:
-        """Returns (included, reverted, gas_used, actual_profit)."""
+    def verify(self, tx_hash: str) -> VerificationResult:
+        """Returns structured realized-PnL verification details."""
         ...
 
 
@@ -221,26 +222,30 @@ class CandidatePipeline:
 
             # --- Stage 6: Verification ---
             if self.verifier is not None:
-                included, reverted, gas_used, actual_profit = self.verifier.verify(tx_hash)
+                verification = self.verifier.verify(tx_hash)
                 self.repo.save_trade_result(
                     execution_id=exec_id,
-                    included=included,
-                    reverted=reverted,
-                    gas_used=gas_used,
-                    actual_net_profit=actual_profit,
+                    included=verification.included,
+                    reverted=verification.reverted,
+                    gas_used=verification.gas_used,
+                    realized_profit_quote=verification.realized_profit_quote,
+                    gas_cost_base=verification.gas_cost_base,
+                    profit_currency=verification.profit_currency,
+                    actual_net_profit=verification.actual_profit_base,
+                    block_number=verification.block_number,
                 )
 
                 _timings["verify_ms"] = (_time.monotonic() - _t4) * 1000
                 _timings["total_ms"] = (_time.monotonic() - _t0) * 1000
 
-                if included and not reverted:
+                if verification.included and not verification.reverted:
                     self.repo.update_opportunity_status(opp_id, "included")
-                    logger.info("[pipeline] %s included: profit=%.6f", opp_id, float(actual_profit))
+                    logger.info("[pipeline] %s included: profit=%.6f", opp_id, float(verification.actual_profit_base))
                     self.dispatcher.trade_executed(
                         pair=opportunity.pair, tx_hash=tx_hash,
-                        profit=float(actual_profit))
-                    return PipelineResult(opp_id, "included", "success", actual_profit, timings=_timings)
-                elif reverted:
+                        profit=float(verification.actual_profit_base))
+                    return PipelineResult(opp_id, "included", "success", verification.actual_profit_base, timings=_timings)
+                elif verification.reverted:
                     self.repo.update_opportunity_status(opp_id, "reverted")
                     logger.info("[pipeline] %s reverted", opp_id)
                     self.dispatcher.trade_reverted(

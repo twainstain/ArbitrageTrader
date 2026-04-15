@@ -58,6 +58,19 @@ FLASHBOTS_RELAY_URL = "https://relay.flashbots.net"
 # Chains where Flashbots bundle submission is available.
 # Other chains have their own MEV protection (e.g. Arbitrum sequencer ordering).
 FLASHBOTS_CHAINS = frozenset({"ethereum"})
+SUPPORTED_LIVE_DEX_TYPES = frozenset({
+    "uniswap_v3", "sushi_v3", "pancakeswap_v3",
+    "velodrome_v2", "aerodrome",
+})
+
+# Swap type constants — must match FlashArbExecutor.sol.
+SWAP_TYPE_V3 = 0
+SWAP_TYPE_VELO = 1
+
+# V3 DEX types (use exactInputSingle).
+V3_DEX_TYPES = frozenset({"uniswap_v3", "sushi_v3", "pancakeswap_v3"})
+# Solidly-fork DEX types (use swapExactTokensForTokens).
+VELO_DEX_TYPES = frozenset({"velodrome_v2", "aerodrome"})
 
 # Uniswap V3 / PancakeSwap V3 / Sushi V3 swap router addresses per chain.
 SWAP_ROUTERS: dict[str, dict[str, str]] = {
@@ -74,13 +87,25 @@ SWAP_ROUTERS: dict[str, dict[str, str]] = {
     "base": {
         "uniswap_v3": "0x2626664c2603336E57B271c5C0b26F421741e481",
         "pancakeswap_v3": "0x1b81D678ffb9C0263b24A97847620C99d213eB14",
+        "aerodrome": "0xcF77a3Ba9A5CA399B7c97c74d54e5b1Beb874E43",
     },
     "optimism": {
         "uniswap_v3": "0xE592427A0AEce92De3Edee1F18E0157C05861564",
         "sushi_v3": "0x8A21F6768C1f8075791D08546Dadf6daA0bE820c",
+        "velodrome_v2": "0xa062aE8A9c5e11aaA026fc2670B0D65cCc8B2858",
     },
     "bsc": {
         "pancakeswap_v3": "0x1b81D678ffb9C0263b24A97847620C99d213eB14",
+    },
+}
+
+# Velodrome/Aerodrome pool factory addresses per chain.
+VELO_FACTORIES: dict[str, dict[str, str]] = {
+    "optimism": {
+        "velodrome_v2": "0xF1046053aa5682b4F9a81b5481394DA16BE5FF5a",
+    },
+    "base": {
+        "aerodrome": "0x420DD381b31aEf6683db6B902084cB0FFECe40Da",
     },
 }
 
@@ -89,9 +114,10 @@ AAVE_V3_POOL: dict[str, str] = {
     "ethereum": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
     "arbitrum": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
     "base": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
+    "optimism": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
 }
 
-# Minimal ABI for calling executeArbitrage on FlashArbExecutor.
+# Minimal ABI for calling executeArbitrage on FlashArbExecutor (v2 with swap types).
 EXECUTOR_ABI = [
     {
         "inputs": [
@@ -105,6 +131,12 @@ EXECUTOR_ABI = [
                     {"name": "feeB", "type": "uint24"},
                     {"name": "amountIn", "type": "uint256"},
                     {"name": "minProfit", "type": "uint256"},
+                    {"name": "swapTypeA", "type": "uint8"},
+                    {"name": "swapTypeB", "type": "uint8"},
+                    {"name": "factoryA", "type": "address"},
+                    {"name": "factoryB", "type": "address"},
+                    {"name": "stableA", "type": "bool"},
+                    {"name": "stableB", "type": "bool"},
                 ],
                 "name": "params",
                 "type": "tuple",
@@ -194,6 +226,14 @@ class ChainExecutor:
                 opportunity=opportunity,
             )
         try:
+            supported, reason = self._supports_live_execution(opportunity)
+            if not supported:
+                return ExecutionResult(
+                    success=False,
+                    reason=reason,
+                    realized_profit_base=ZERO,
+                    opportunity=opportunity,
+                )
             tx_data = self._build_transaction(opportunity)
 
             # Step 1: Simulate via eth_call before spending gas.
@@ -266,6 +306,9 @@ class ChainExecutor:
         Resolves token addresses dynamically from the pair's base/quote
         assets rather than hardcoding WETH/USDC.
         """
+        supported, reason = self._supports_live_execution(opportunity)
+        if not supported:
+            raise ChainExecutorError(reason)
         from tokens import resolve_token_address, token_decimals
 
         pair_parts = opportunity.pair.split("/", 1)
@@ -297,6 +340,13 @@ class ChainExecutor:
         fee_a = self._resolve_fee(opportunity.buy_dex)
         fee_b = self._resolve_fee(opportunity.sell_dex)
 
+        buy_type = self._resolve_dex_type(opportunity.buy_dex)
+        sell_type = self._resolve_dex_type(opportunity.sell_dex)
+        swap_type_a = SWAP_TYPE_VELO if buy_type in VELO_DEX_TYPES else SWAP_TYPE_V3
+        swap_type_b = SWAP_TYPE_VELO if sell_type in VELO_DEX_TYPES else SWAP_TYPE_V3
+        factory_a = self._resolve_velo_factory(opportunity.buy_dex) if swap_type_a == SWAP_TYPE_VELO else "0x" + "00" * 20
+        factory_b = self._resolve_velo_factory(opportunity.sell_dex) if swap_type_b == SWAP_TYPE_VELO else "0x" + "00" * 20
+
         call_data = self.contract.functions.executeArbitrage((
             Web3.to_checksum_address(base_token),
             Web3.to_checksum_address(quote_token),
@@ -306,6 +356,12 @@ class ChainExecutor:
             fee_b,
             amount_in_raw,
             min_profit_raw,
+            swap_type_a,
+            swap_type_b,
+            Web3.to_checksum_address(factory_a),
+            Web3.to_checksum_address(factory_b),
+            False,  # stableA — volatile pools for arb
+            False,  # stableB
         ))
 
         nonce = self.w3.eth.get_transaction_count(self.account.address)
@@ -480,20 +536,17 @@ class ChainExecutor:
         tx_hash = Web3.keccak(signed_tx.rawTransaction)  # type: ignore[union-attr]
         return tx_hash
 
-    # DEX types that use a different swap interface than V3 exactInputSingle.
-    # The FlashArbExecutor contract only supports V3 routers.
-    _UNSUPPORTED_EXEC_TYPES = frozenset({"velodrome_v2", "aerodrome", "curve", "traderjoe_lb"})
+    # DEX types not yet supported in execution.
+    _UNSUPPORTED_EXEC_TYPES = frozenset({"curve", "traderjoe_lb"})
 
     def _resolve_router(self, dex_name: str) -> str:
         """Map a DEX name from the opportunity to its swap router address."""
         chain_routers = SWAP_ROUTERS.get(self.chain, {})
-        # Try to match by dex_type from config.
         for dex in self.config.dexes:
             if dex.name == dex_name and dex.dex_type:
                 if dex.dex_type in self._UNSUPPORTED_EXEC_TYPES:
                     raise ChainExecutorError(
-                        f"DEX '{dex_name}' ({dex.dex_type}) cannot be used for execution "
-                        f"— FlashArbExecutor only supports V3 routers."
+                        f"DEX '{dex_name}' ({dex.dex_type}) cannot be used for execution."
                     )
                 router = chain_routers.get(dex.dex_type)
                 if router:
@@ -501,6 +554,35 @@ class ChainExecutor:
         raise ChainExecutorError(
             f"No swap router for DEX '{dex_name}' on chain '{self.chain}'."
         )
+
+    def _resolve_velo_factory(self, dex_name: str) -> str:
+        """Resolve the Velodrome/Aerodrome pool factory for a DEX."""
+        chain_factories = VELO_FACTORIES.get(self.chain, {})
+        for dex in self.config.dexes:
+            if dex.name == dex_name and dex.dex_type:
+                factory = chain_factories.get(dex.dex_type)
+                if factory:
+                    return factory
+        raise ChainExecutorError(
+            f"No Velo factory for DEX '{dex_name}' on chain '{self.chain}'."
+        )
+
+    def _resolve_dex_type(self, dex_name: str) -> str:
+        for dex in self.config.dexes:
+            if dex.name == dex_name and dex.dex_type:
+                return dex.dex_type
+        raise ChainExecutorError(f"No dex_type configured for DEX '{dex_name}'.")
+
+    def _supports_live_execution(self, opportunity: Opportunity) -> tuple[bool, str]:
+        buy_type = self._resolve_dex_type(opportunity.buy_dex)
+        sell_type = self._resolve_dex_type(opportunity.sell_dex)
+        unsupported = [
+            dex_type for dex_type in (buy_type, sell_type)
+            if dex_type not in SUPPORTED_LIVE_DEX_TYPES
+        ]
+        if unsupported:
+            return False, f"unsupported_live_venue:{','.join(sorted(set(unsupported)))}"
+        return True, "ok"
 
     def _resolve_fee(self, dex_name: str) -> int:
         """Get the on-chain fee tier for a DEX (in hundredths of a bip)."""
