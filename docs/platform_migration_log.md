@@ -249,18 +249,166 @@ src/
 
 ---
 
-## Remaining Phases
+## Phase 3: Config, Repository, Metrics, Backends (evaluated — mostly skipped)
 
-### Phase 3: Subclass Pattern (config, repository, metrics, alerting backends, API)
+### Findings
 
-Each module becomes a product-specific subclass of the platform's base:
-- `BotConfig` → `ArbitrageConfig(BaseConfig)`
-- `Repository` → `ArbitrageRepository(BaseRepository)`
-- `MetricsCollector` → use TP generic `increment(name, tag=)`
-- Alert backends → import from TP, add `configured` property
-- API → `create_app()` extends `create_base_app()`
+Phase 3 modules are **overwhelmingly product-specific**. The platform provides tiny base classes (3-4 methods each) while ArbitrageTrader needs 10-30x more domain logic. Subclassing would technically work but provides almost no code reduction.
 
-### Phase 4: Major Refactors (risk policy, pipeline)
+| Module | AT Lines | TP Base Methods | AT Domain Methods | Migration ROI |
+|--------|:--------:|:---------------:|:-----------------:|:-------------:|
+| Alerting backends | 101/67/61 | send(), configured, name | Per-event subject prefixes, HTML formatting | **Skip** — AT's are more polished |
+| MetricsCollector | 148 | increment, set_gauge, record_latency | 9 methods, rich snapshot with rates/percentiles | **Skip** — adapter bigger than original |
+| BotConfig | 260 | from_file, validate, to_dict | DexConfig, PairConfig, gas_cost_for_chain, min_liquidity | **Skip** — custom JSON parsing |
+| Repository | 888 | checkpoint, update_status | 30+ domain methods, PnL analytics, scan history | **Skip** — 3 reusable out of 30+ |
 
-- Risk policy → Extract 8 rules into pluggable `RiskRule` objects for `RuleBasedPolicy`
-- Pipeline → `ArbitragePipeline(BasePipeline)` with stage callbacks
+### Decision: Skip, but document the pattern for new bots
+
+These modules stay as-is in ArbitrageTrader. But **new bots** (SolanaTrader, PolymarketTrader) should build their domain modules on top of the platform from day one, not extract later.
+
+### How New Bots Should Use the Platform
+
+**MetricsCollector** — use TP's generic API directly:
+
+```python
+# SolanaTrader / PolymarketTrader — use generic API from the start
+from trading_platform.observability import MetricsCollector
+
+metrics = MetricsCollector()
+metrics.increment("opportunities_detected")
+metrics.increment("rejected", tag="below_min_profit")
+metrics.increment("executions_submitted")
+metrics.set_gauge("spread_bps", 15.5)
+metrics.record_latency(145.2)
+
+snap = metrics.snapshot()
+# → {"counters": {"opportunities_detected": 1, ...}, "p95_latency_ms": 145.2}
+```
+
+No need for domain wrappers if you design with generic counters from the start.
+
+**Config** — subclass BaseConfig:
+
+```python
+from trading_platform.config import BaseConfig
+
+@dataclass(frozen=True)
+class SolanaConfig(BaseConfig):
+    pair: str = "SOL/USDC"
+    trade_size_sol: Decimal = Decimal("10")
+    min_profit_sol: Decimal = Decimal("0.01")
+    jupiter_slippage_bps: int = 50
+    rpc_urls: list[str] = field(default_factory=list)
+
+    def validate(self) -> None:
+        if self.trade_size_sol <= 0:
+            raise ValueError("trade_size must be positive")
+
+cfg = SolanaConfig.from_file("config/solana.json")
+```
+
+**Repository** — subclass BaseRepository:
+
+```python
+from trading_platform.persistence import BaseRepository, init_db
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS swaps (
+    swap_id TEXT PRIMARY KEY,
+    pair TEXT NOT NULL,
+    dex_a TEXT NOT NULL,
+    dex_b TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'detected',
+    profit_sol TEXT NOT NULL DEFAULT '0',
+    detected_at TEXT NOT NULL
+);
+"""
+
+class SolanaRepository(BaseRepository):
+    def create_swap(self, pair, dex_a, dex_b) -> str:
+        swap_id = f"swap_{uuid.uuid4().hex[:12]}"
+        self.conn.execute("INSERT INTO swaps ...", (...))
+        self.conn.commit()
+        return swap_id
+
+    def get_pnl_summary(self) -> dict:
+        # Product-specific analytics
+        ...
+
+db = init_db(schema=SCHEMA)
+repo = SolanaRepository(db)
+```
+
+**Alert backends** — use TP's directly or subclass for custom formatting:
+
+```python
+from trading_platform.alerting import GmailAlert, DiscordAlert, AlertDispatcher
+
+# Use as-is (generic [Trading] subject prefix)
+gmail = GmailAlert(subject_prefix="[Solana]")
+discord = DiscordAlert()
+
+dispatcher = AlertDispatcher()
+dispatcher.add_backend(gmail)
+dispatcher.add_backend(discord)
+```
+
+### Key Lesson
+
+> **Build on the platform from day one. Don't extract later.**
+>
+> ArbitrageTrader was built before the platform existed, so its modules are self-contained
+> and tightly coupled to the domain. Migrating them provides minimal code reduction.
+> New bots should start with the platform's generic APIs and only add domain wrappers
+> where the generic names are confusing (like CircuitBreaker's record_failure vs record_revert).
+
+### Tests
+
+949/949 pass. No code changes in Phase 3 (evaluation only).
+
+---
+
+## Remaining: Phase 4 (risk policy, pipeline)
+
+### Risk Policy → RuleBasedPolicy
+
+Extract 8 hardcoded rules into pluggable `RiskRule` objects:
+- MinSpreadRule, MinProfitRule, PoolLiquidityRule, WarningFlagRule
+- GasProfitRatioRule, RateLimitRule, ExposureLimitRule, ExecutionModeRule
+
+**For other bots**: Each product defines its own rules:
+```python
+# PolymarketTrader rules
+class MinEdgeRule:
+    name = "min_edge"
+    def evaluate(self, bet, context) -> RiskVerdict:
+        if bet.edge_pct < context["min_edge"]:
+            return RiskVerdict(False, "edge_too_thin")
+        return RiskVerdict(True, "ok")
+
+class MaxPositionRule:
+    name = "max_position"
+    def evaluate(self, bet, context) -> RiskVerdict:
+        if context["current_exposure"] + bet.size > context["max_exposure"]:
+            return RiskVerdict(False, "position_limit")
+        return RiskVerdict(True, "ok")
+```
+
+### Pipeline → BasePipeline
+
+Convert `CandidatePipeline` to subclass `BasePipeline` with abstract stage methods.
+
+**For other bots**: Each product implements its own stages:
+```python
+class SolanaPipeline(BasePipeline):
+    def detect(self, swap) -> str:
+        return self.repo.create_swap(swap.pair, swap.dex_a, swap.dex_b)
+
+    def price(self, swap_id, swap) -> None:
+        self.repo.save_pricing(swap_id, swap.cost, swap.output)
+
+    def evaluate_risk(self, swap) -> RiskVerdict:
+        return self.risk_policy.evaluate(swap)
+```
+
+These are the highest-effort items. Recommend deferring until after SolanaTrader or PolymarketTrader actively needs the shared pipeline.
