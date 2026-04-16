@@ -23,7 +23,7 @@
     "ethereum": "simulated",
     "base": "live",
     "polygon": "live",
-    "avax": "simulated"
+    "avax": "live"
   },
   "extra_pairs": [
     {"pair": "WETH/USDT", "base_asset": "WETH", "quote_asset": "USDT", "trade_size": 1.0},
