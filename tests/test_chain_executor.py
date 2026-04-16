@@ -17,7 +17,9 @@ from execution.chain_executor import (
     SUPPORTED_LIVE_DEX_TYPES,
     SWAP_TYPE_V3,
     SWAP_TYPE_VELO,
+    SWAP_TYPE_V3_02,
     V3_DEX_TYPES,
+    V3_02_ROUTERS,
     VELO_DEX_TYPES,
 )
 from core.config import BotConfig, DexConfig
@@ -903,6 +905,177 @@ class ExplicitChainParamTests(unittest.TestCase):
         }):
             executor = ChainExecutor(_make_config(), chain=None)
             self.assertEqual(executor.chain, "ethereum")
+
+
+class SwapRouter02Tests(unittest.TestCase):
+    """Tests for SwapRouter02 support (Base chain uses a different interface)."""
+
+    def test_swap_type_v3_02_constant(self) -> None:
+        self.assertEqual(SWAP_TYPE_V3_02, 2)
+
+    def test_uniswap_base_in_v3_02_routers(self) -> None:
+        self.assertIn("0x2626664c2603336E57B271c5C0b26F421741e481", V3_02_ROUTERS)
+
+    def test_ethereum_uniswap_not_v3_02(self) -> None:
+        self.assertNotIn("0xE592427A0AEce92De3Edee1F18E0157C05861564", V3_02_ROUTERS)
+
+    def test_sushi_base_not_v3_02(self) -> None:
+        self.assertNotIn("0xFB7eF66a7e61224DD6FcD0D7d9C3be5C8B049b9f", V3_02_ROUTERS)
+
+    @patch("execution.chain_executor.Web3")
+    def test_build_transaction_per_router_detection_on_base(self, mock_web3_cls) -> None:
+        """On Base: Sushi uses V3 (original), Uniswap uses V3_02 (no deadline)."""
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        mock_w3.eth.account.from_key.return_value = MagicMock(address="0xfake")
+        mock_w3.eth.get_transaction_count.return_value = 0
+        mock_w3.eth.gas_price = 1_000_000
+        mock_w3.to_wei = lambda v, u: v * 1_000_000_000
+
+        mock_contract = MagicMock()
+        mock_contract.functions.executeArbitrage.return_value.build_transaction.return_value = {
+            "data": "0x", "from": "0xfake", "to": "0xcontract"
+        }
+        mock_w3.eth.contract.return_value = mock_contract
+
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.001, estimated_gas_cost_base=0.0001,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=10.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="Uniswap-Base", base_price=0, fee_bps=5.0,
+                          volatility_bps=0, chain="base", dex_type="uniswap_v3"),
+                DexConfig(name="Sushi-Base", base_price=0, fee_bps=30.0,
+                          volatility_bps=0, chain="base", dex_type="sushi_v3"),
+            ],
+        )
+        config.validate()
+
+        with patch.dict("os.environ", {
+            "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+            "EXECUTOR_CONTRACT_BASE": "0x" + "cd" * 20,
+        }):
+            executor = ChainExecutor(config, chain="base")
+
+        opp = Opportunity(
+            pair="WETH/USDC", buy_dex="Sushi-Base", sell_dex="Uniswap-Base",
+            trade_size=1.0, cost_to_buy_quote=2300.0,
+            proceeds_from_sell_quote=2310.0, gross_profit_quote=10.0,
+            net_profit_quote=8.0, net_profit_base=0.003,
+            chain="base",
+        )
+        executor._build_transaction(opp)
+
+        params = mock_contract.functions.executeArbitrage.call_args[0][0]
+        # Sushi-Base router uses original SwapRouter → SWAP_TYPE_V3
+        self.assertEqual(params[8], SWAP_TYPE_V3)      # swapTypeA (Sushi = original V3)
+        # Uniswap-Base router uses SwapRouter02 → SWAP_TYPE_V3_02
+        self.assertEqual(params[9], SWAP_TYPE_V3_02)   # swapTypeB (Uniswap = V3_02)
+
+    @patch("execution.chain_executor.Web3")
+    def test_build_transaction_uses_v3_on_arbitrum(self, mock_web3_cls) -> None:
+        """On Arbitrum, V3 DEXes should use SWAP_TYPE_V3 (=0), not V3_02."""
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        mock_w3.eth.account.from_key.return_value = MagicMock(address="0xfake")
+        mock_w3.eth.get_transaction_count.return_value = 0
+        mock_w3.eth.gas_price = 1_000_000
+        mock_w3.to_wei = lambda v, u: v * 1_000_000_000
+
+        mock_contract = MagicMock()
+        mock_contract.functions.executeArbitrage.return_value.build_transaction.return_value = {
+            "data": "0x", "from": "0xfake", "to": "0xcontract"
+        }
+        mock_w3.eth.contract.return_value = mock_contract
+
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.001, estimated_gas_cost_base=0.0002,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=10.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="Uniswap-Arbitrum", base_price=0, fee_bps=5.0,
+                          volatility_bps=0, chain="arbitrum", dex_type="uniswap_v3"),
+                DexConfig(name="Sushi-Arbitrum", base_price=0, fee_bps=30.0,
+                          volatility_bps=0, chain="arbitrum", dex_type="sushi_v3"),
+            ],
+        )
+        config.validate()
+
+        with patch.dict("os.environ", {
+            "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+            "EXECUTOR_CONTRACT": "0x" + "cd" * 20,
+        }):
+            executor = ChainExecutor(config, chain="arbitrum")
+
+        opp = Opportunity(
+            pair="WETH/USDC", buy_dex="Uniswap-Arbitrum", sell_dex="Sushi-Arbitrum",
+            trade_size=1.0, cost_to_buy_quote=2300.0,
+            proceeds_from_sell_quote=2310.0, gross_profit_quote=10.0,
+            net_profit_quote=8.0, net_profit_base=0.003,
+            chain="arbitrum",
+        )
+        executor._build_transaction(opp)
+
+        params = mock_contract.functions.executeArbitrage.call_args[0][0]
+        self.assertEqual(params[8], SWAP_TYPE_V3)   # swapTypeA = 0
+        self.assertEqual(params[9], SWAP_TYPE_V3)   # swapTypeB = 0
+
+    @patch("execution.chain_executor.Web3")
+    def test_base_aerodrome_still_uses_velo_type(self, mock_web3_cls) -> None:
+        """Aerodrome on Base should still use SWAP_TYPE_VELO, not V3_02."""
+        mock_w3 = MagicMock()
+        mock_web3_cls.return_value = mock_w3
+        mock_web3_cls.HTTPProvider = MagicMock()
+        mock_web3_cls.to_checksum_address = lambda x: x
+        mock_w3.eth.account.from_key.return_value = MagicMock(address="0xfake")
+        mock_w3.eth.get_transaction_count.return_value = 0
+        mock_w3.eth.gas_price = 1_000_000
+        mock_w3.to_wei = lambda v, u: v * 1_000_000_000
+
+        mock_contract = MagicMock()
+        mock_contract.functions.executeArbitrage.return_value.build_transaction.return_value = {
+            "data": "0x", "from": "0xfake", "to": "0xcontract"
+        }
+        mock_w3.eth.contract.return_value = mock_contract
+
+        config = BotConfig(
+            pair="WETH/USDC", base_asset="WETH", quote_asset="USDC",
+            trade_size=1.0, min_profit_base=0.001, estimated_gas_cost_base=0.0001,
+            flash_loan_fee_bps=9.0, flash_loan_provider="aave_v3",
+            slippage_bps=10.0, poll_interval_seconds=0.0,
+            dexes=[
+                DexConfig(name="Uniswap-Base", base_price=0, fee_bps=5.0,
+                          volatility_bps=0, chain="base", dex_type="uniswap_v3"),
+                DexConfig(name="Aerodrome-Base", base_price=0, fee_bps=20.0,
+                          volatility_bps=0, chain="base", dex_type="aerodrome"),
+            ],
+        )
+        config.validate()
+
+        with patch.dict("os.environ", {
+            "EXECUTOR_PRIVATE_KEY": "0x" + "ab" * 32,
+            "EXECUTOR_CONTRACT_BASE": "0x" + "cd" * 20,
+        }):
+            executor = ChainExecutor(config, chain="base")
+
+        opp = Opportunity(
+            pair="WETH/USDC", buy_dex="Uniswap-Base", sell_dex="Aerodrome-Base",
+            trade_size=1.0, cost_to_buy_quote=2300.0,
+            proceeds_from_sell_quote=2310.0, gross_profit_quote=10.0,
+            net_profit_quote=8.0, net_profit_base=0.003,
+            chain="base",
+        )
+        executor._build_transaction(opp)
+
+        params = mock_contract.functions.executeArbitrage.call_args[0][0]
+        self.assertEqual(params[8], SWAP_TYPE_V3_02)  # buy on Uni-Base = V3_02
+        self.assertEqual(params[9], SWAP_TYPE_VELO)   # sell on Aerodrome = Velo
 
 
 class BaseChainRouterTests(unittest.TestCase):

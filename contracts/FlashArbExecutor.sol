@@ -51,7 +51,8 @@ interface IFlashLoanSimpleReceiver {
     ) external returns (bool);
 }
 
-/// @dev Uniswap V3 / PancakeSwap V3 / Sushi V3 swap router (same interface).
+/// @dev Uniswap V3 SwapRouter (original) — Ethereum, Arbitrum, Optimism.
+///      Has `deadline` in the params struct.
 interface ISwapRouter {
     struct ExactInputSingleParams {
         address tokenIn;
@@ -59,6 +60,25 @@ interface ISwapRouter {
         uint24  fee;
         address recipient;
         uint256 deadline;
+        uint256 amountIn;
+        uint256 amountOutMinimum;
+        uint160 sqrtPriceLimitX96;
+    }
+
+    function exactInputSingle(ExactInputSingleParams calldata params)
+        external
+        payable
+        returns (uint256 amountOut);
+}
+
+/// @dev Uniswap V3 SwapRouter02 — Base (and newer deployments).
+///      Drops `deadline` from the params struct (uses block.timestamp internally).
+interface ISwapRouter02 {
+    struct ExactInputSingleParams {
+        address tokenIn;
+        address tokenOut;
+        uint24  fee;
+        address recipient;
         uint256 amountIn;
         uint256 amountOutMinimum;
         uint160 sqrtPriceLimitX96;
@@ -93,8 +113,9 @@ interface IVeloRouter {
 contract FlashArbExecutor is IFlashLoanSimpleReceiver {
 
     // Swap type constants — packed into uint8 in ArbParams.
-    uint8 constant SWAP_V3   = 0;  // Uniswap V3 / Sushi V3 / PancakeSwap V3
-    uint8 constant SWAP_VELO = 1;  // Velodrome V2 / Aerodrome (Solidly-fork)
+    uint8 constant SWAP_V3      = 0;  // SwapRouter (original): Ethereum, Arbitrum, Optimism
+    uint8 constant SWAP_VELO    = 1;  // Velodrome V2 / Aerodrome (Solidly-fork)
+    uint8 constant SWAP_V3_02   = 2;  // SwapRouter02 (no deadline): Base, newer deployments
 
     address public immutable owner;
     IPool   public immutable aavePool;
@@ -213,6 +234,8 @@ contract FlashArbExecutor is IFlashLoanSimpleReceiver {
     ) internal returns (uint256 amountOut) {
         if (swapType == SWAP_VELO) {
             return _swapVelo(router, tokenIn, tokenOut, amountIn, factory, stable);
+        } else if (swapType == SWAP_V3_02) {
+            return _swapV3_02(router, tokenIn, tokenOut, amountIn, fee);
         } else {
             return _swapV3(router, tokenIn, tokenOut, amountIn, fee);
         }
@@ -232,6 +255,26 @@ contract FlashArbExecutor is IFlashLoanSimpleReceiver {
                 fee:               fee,
                 recipient:         address(this),
                 deadline:          block.timestamp,
+                amountIn:          amountIn,
+                amountOutMinimum:  0,
+                sqrtPriceLimitX96: 0
+            })
+        );
+    }
+
+    function _swapV3_02(
+        address router,
+        address tokenIn,
+        address tokenOut,
+        uint256 amountIn,
+        uint24  fee
+    ) internal returns (uint256) {
+        return ISwapRouter02(router).exactInputSingle(
+            ISwapRouter02.ExactInputSingleParams({
+                tokenIn:           tokenIn,
+                tokenOut:          tokenOut,
+                fee:               fee,
+                recipient:         address(this),
                 amountIn:          amountIn,
                 amountOutMinimum:  0,
                 sqrtPriceLimitX96: 0

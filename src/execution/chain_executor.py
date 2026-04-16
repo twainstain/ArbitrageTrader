@@ -94,13 +94,22 @@ SUPPORTED_LIVE_DEX_TYPES = frozenset({
 })
 
 # Swap type constants — must match FlashArbExecutor.sol.
-SWAP_TYPE_V3 = 0
-SWAP_TYPE_VELO = 1
+SWAP_TYPE_V3 = 0       # SwapRouter (original, has deadline): Ethereum, Arbitrum, Optimism
+SWAP_TYPE_VELO = 1     # Velodrome V2 / Aerodrome (Solidly-fork)
+SWAP_TYPE_V3_02 = 2    # SwapRouter02 (no deadline): Base, newer deployments
 
 # V3 DEX types (use exactInputSingle).
 V3_DEX_TYPES = frozenset({"uniswap_v3", "sushi_v3", "pancakeswap_v3"})
 # Solidly-fork DEX types (use swapExactTokensForTokens).
 VELO_DEX_TYPES = frozenset({"velodrome_v2", "aerodrome"})
+
+# Router addresses that use SwapRouter02 (no deadline param, selector 0x04e45aaf).
+# All other V3 routers use the original SwapRouter (with deadline, selector 0x414bf389).
+# Per-router detection because even on the same chain (Base), Uniswap uses
+# SwapRouter02 while Sushi/PancakeSwap use the original SwapRouter.
+V3_02_ROUTERS = frozenset({
+    "0x2626664c2603336E57B271c5C0b26F421741e481",  # Uniswap SwapRouter02 on Base
+})
 
 # Uniswap V3 / PancakeSwap V3 / Sushi V3 swap router addresses per chain.
 SWAP_ROUTERS: dict[str, dict[str, str]] = {
@@ -443,8 +452,19 @@ class ChainExecutor:
 
         buy_type = self._resolve_dex_type(opportunity.buy_dex)
         sell_type = self._resolve_dex_type(opportunity.sell_dex)
-        swap_type_a = SWAP_TYPE_VELO if buy_type in VELO_DEX_TYPES else SWAP_TYPE_V3
-        swap_type_b = SWAP_TYPE_VELO if sell_type in VELO_DEX_TYPES else SWAP_TYPE_V3
+        # Determine swap type per router:
+        #   - Velo/Aerodrome → SWAP_TYPE_VELO
+        #   - V3 router in V3_02_ROUTERS → SWAP_TYPE_V3_02 (no deadline)
+        #   - V3 router elsewhere → SWAP_TYPE_V3 (original, with deadline)
+        def _v3_swap_type(router_addr: str, dex_type: str) -> int:
+            if dex_type in VELO_DEX_TYPES:
+                return SWAP_TYPE_VELO
+            if router_addr in V3_02_ROUTERS:
+                return SWAP_TYPE_V3_02
+            return SWAP_TYPE_V3
+
+        swap_type_a = _v3_swap_type(router_a, buy_type)
+        swap_type_b = _v3_swap_type(router_b, sell_type)
         factory_a = self._resolve_velo_factory(opportunity.buy_dex) if swap_type_a == SWAP_TYPE_VELO else "0x" + "00" * 20
         factory_b = self._resolve_velo_factory(opportunity.sell_dex) if swap_type_b == SWAP_TYPE_VELO else "0x" + "00" * 20
 
