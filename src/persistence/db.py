@@ -269,11 +269,21 @@ class DbConnection:
 
     @contextmanager
     def batch(self):
-        """Suppress individual commit() calls; do one commit at the end."""
+        """Suppress individual commit() calls; do one commit at the end.
+
+        On exception: rolls back instead of committing, preventing
+        partial writes (e.g. opportunity stuck at 'approved' when
+        simulation crashes).
+        """
         self._batch_depth += 1
         try:
             yield
-        finally:
+        except Exception:
+            self._batch_depth -= 1
+            if self._batch_depth == 0:
+                self._conn.rollback()
+            raise
+        else:
             self._batch_depth -= 1
             if self._batch_depth == 0:
                 self._conn.commit()

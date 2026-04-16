@@ -440,7 +440,16 @@ class PipelineConsumer:
 
             # Process through full pipeline.
             start_ms = time.time() * 1000
-            result = self.pipeline.process(opp)
+            try:
+                result = self.pipeline.process(opp)
+            except Exception as exc:
+                logger.error(
+                    "Pipeline crashed for %s %s→%s on %s: %s",
+                    opp.pair, opp.buy_dex, opp.sell_dex, opp.chain, exc,
+                    exc_info=True,
+                )
+                self.metrics.record_opportunity_rejected(f"pipeline_crash:{type(exc).__name__}")
+                continue
             latency_ms = time.time() * 1000 - start_ms
             self.metrics.record_latency_ms(latency_ms)
 
