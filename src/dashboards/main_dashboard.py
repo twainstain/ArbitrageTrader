@@ -845,6 +845,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         return nativePrices[chain] || {ethereum:2300,arbitrum:2300,base:2300,optimism:2300,polygon:0.09,bsc:600,avax:9.5}[chain] || 0;
     }
 
+    // Approximate USD prices for common ERC-20 tokens.
+    // WETH/ETH uses the live native price; stablecoins are ~$1.
+    function tokenUsdPrice(symbol) {
+        const s = symbol.toUpperCase();
+        if (s === 'WETH' || s === 'ETH') return getNativePrice('ethereum');
+        if (s === 'USDC' || s === 'USDT') return 1.0;
+        if (s === 'WBTC') return 65000;
+        if (s === 'WAVAX') return getNativePrice('avax');
+        return 0;
+    }
+
     async function loadWalletBalance() {
         try {
             const data = await fetchJSON('/wallet/balance');
@@ -856,7 +867,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             const addr = data.address;
             const short = addr.slice(0,6) + '...' + addr.slice(-4);
             const defaultExplorer = 'etherscan.io';
-            // Use the first available chain's explorer for the wallet link
             const firstChain = Object.keys(data.balances)[0] || 'ethereum';
             const walletExplorer = CHAIN_EXPLORER[firstChain] || defaultExplorer;
             let cards = `<div class="card">
@@ -864,21 +874,38 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <div class="card-value" style="font-size:16px"><a href="https://${walletExplorer}/address/${addr}" target="_blank" style="color:#494fdf">${short}</a></div>
             </div>`;
             let totalUsd = 0;
-            for (const [chain, bal] of Object.entries(data.balances)) {
-                if (bal === null) continue;
+            for (const [chain, chainData] of Object.entries(data.balances)) {
+                if (chainData === null) continue;
                 const native = CHAIN_NATIVE[chain] || {symbol: 'ETH'};
-                const usd = bal * getNativePrice(chain);
-                totalUsd += usd;
-                const color = bal > 0.001 ? '#00a87e' : '#e23b4a';
+                const nativeBal = chainData.native || 0;
+                const tokens = chainData.tokens || {};
+
+                // Calculate total USD for this chain: native + all ERC-20s.
+                let chainUsd = nativeBal * getNativePrice(chain);
+                let tokenLines = [];
+                for (const [sym, bal] of Object.entries(tokens)) {
+                    const usd = bal * tokenUsdPrice(sym);
+                    chainUsd += usd;
+                    // Format: show 6 decimals for tiny amounts, 2 for large
+                    const fmt = bal < 0.01 ? bal.toFixed(6) : bal < 1000 ? bal.toFixed(4) : bal.toFixed(2);
+                    tokenLines.push(`${fmt} ${sym}`);
+                }
+                totalUsd += chainUsd;
+
+                const color = chainUsd > 1 ? '#00a87e' : '#8d969e';
+                const nativeFmt = nativeBal < 0.01 ? nativeBal.toFixed(6) : nativeBal.toFixed(4);
+                let valueParts = [`${nativeFmt} ${native.symbol}`];
+                valueParts = valueParts.concat(tokenLines);
+
                 cards += `<div class="card">
-                    <div class="card-title">${chain} Balance</div>
-                    <div class="card-value" style="color:${color}">${bal.toFixed(6)} ${native.symbol}</div>
-                    <div class="card-sub">~$${usd.toFixed(2)}</div>
+                    <div class="card-title">${chain}</div>
+                    <div class="card-value" style="color:${color};font-size:18px">~$${chainUsd.toFixed(2)}</div>
+                    <div class="card-sub">${valueParts.join(' | ')}</div>
                 </div>`;
             }
             cards += `<div class="card">
-                <div class="card-title">Total Balance</div>
-                <div class="card-value">~$${totalUsd.toFixed(2)}</div>
+                <div class="card-title">Total Capital</div>
+                <div class="card-value" style="color:#494fdf">~$${totalUsd.toFixed(2)}</div>
             </div>`;
             grid.innerHTML = cards;
         } catch(e) { console.warn('Wallet balance load failed:', e); }

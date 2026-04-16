@@ -589,11 +589,12 @@ def create_app(
 
     @app.get("/wallet/balance")
     def wallet_balance():
-        """Fetch wallet balance from on-chain RPC (non-blocking cache)."""
+        """Fetch wallet balances: native gas + ERC-20 trading capital."""
         import os
         from web3 import Web3
         from core.contracts import PUBLIC_RPC_URLS
         from core.env import get_rpc_overrides
+        from core.tokens import CHAIN_TOKENS, token_decimals
 
         private_key = os.environ.get("EXECUTOR_PRIVATE_KEY", "")
         if not private_key:
@@ -605,6 +606,15 @@ def create_app(
         except Exception:
             return {"address": "", "balances": {}, "error": "invalid key"}
 
+        # Minimal ERC-20 balanceOf ABI.
+        ERC20_ABI = [{"inputs": [{"name": "account", "type": "address"}],
+                      "name": "balanceOf",
+                      "outputs": [{"name": "", "type": "uint256"}],
+                      "stateMutability": "view", "type": "function"}]
+
+        # Tokens to query per chain (the ones we actually trade).
+        TOKENS_TO_CHECK = ("weth", "usdc", "usdt", "wbtc", "wavax")
+
         rpc_overrides = get_rpc_overrides()
         balances = {}
         from observability.wallet import CHAINS
@@ -614,8 +624,35 @@ def create_app(
                 continue
             try:
                 w3 = Web3(Web3.HTTPProvider(rpc_url, request_kwargs={"timeout": 3}))
-                bal_wei = w3.eth.get_balance(address)
-                balances[chain] = float(bal_wei) / 1e18
+                addr_cs = Web3.to_checksum_address(address)
+
+                # Native gas balance.
+                bal_wei = w3.eth.get_balance(addr_cs)
+                native_bal = float(bal_wei) / 1e18
+
+                # ERC-20 token balances.
+                tokens = {}
+                chain_tokens = CHAIN_TOKENS.get(chain)
+                if chain_tokens:
+                    for attr in TOKENS_TO_CHECK:
+                        token_addr = getattr(chain_tokens, attr, None)
+                        if not token_addr:
+                            continue
+                        try:
+                            contract = w3.eth.contract(
+                                address=Web3.to_checksum_address(token_addr),
+                                abi=ERC20_ABI,
+                            )
+                            raw = contract.functions.balanceOf(addr_cs).call()
+                            sym = attr.upper()
+                            dec = token_decimals(sym)
+                            bal = float(raw) / (10 ** dec)
+                            if bal > 0:
+                                tokens[sym] = bal
+                        except Exception:
+                            pass
+
+                balances[chain] = {"native": native_bal, "tokens": tokens}
             except Exception:
                 balances[chain] = None
         return {"address": address, "balances": balances}
