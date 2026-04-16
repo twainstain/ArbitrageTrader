@@ -125,6 +125,10 @@ SWAP_ROUTERS: dict[str, dict[str, str]] = {
         "sushi_v3": "0xFB7eF66a7e61224DD6FcD0D7d9C3be5C8B049b9f",
         "velodrome_v2": "0xa062aE8A9c5e11aaA026fc2670B0D65cCc8B2858",
     },
+    "polygon": {
+        "uniswap_v3": "0xE592427A0AEce92De3Edee1F18E0157C05861564",
+        "sushi_v3": "0xFB7eF66a7e61224DD6FcD0D7d9C3be5C8B049b9f",
+    },
     "bsc": {
         "pancakeswap_v3": "0x1b81D678ffb9C0263b24A97847620C99d213eB14",
     },
@@ -146,6 +150,7 @@ AAVE_V3_POOL: dict[str, str] = {
     "arbitrum": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
     "base": "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5",
     "optimism": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
+    "polygon": "0x794a61358D6845594F94dc1DB02A252b5b4814aD",
 }
 
 # Minimal ABI for calling executeArbitrage on FlashArbExecutor (v2 with swap types).

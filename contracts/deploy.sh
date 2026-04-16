@@ -53,6 +53,7 @@ get_aave_pool() {
         arbitrum) echo "0x794a61358D6845594F94dc1DB02A252b5b4814aD" ;;
         base)     echo "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5" ;;
         optimism) echo "0x794a61358D6845594F94dc1DB02A252b5b4814aD" ;;
+        polygon)  echo "0x794a61358D6845594F94dc1DB02A252b5b4814aD" ;;
         *)        echo "" ;;
     esac
 }
@@ -64,6 +65,7 @@ get_rpc_url() {
         arbitrum) echo "${RPC_ARBITRUM:-}" ;;
         base)     echo "${RPC_BASE:-}" ;;
         optimism) echo "${RPC_OPTIMISM:-}" ;;
+        polygon)  echo "${RPC_POLYGON:-}" ;;
         *)        echo "" ;;
     esac
 }
@@ -78,7 +80,7 @@ fi
 if [[ -z "$CHAIN" ]]; then
     echo "Usage: ./deploy.sh <chain> [--dry]"
     echo ""
-    echo "Supported chains: ethereum, arbitrum, base, optimism"
+    echo "Supported chains: ethereum, arbitrum, base, optimism, polygon"
     echo ""
     echo "Examples:"
     echo "  ./deploy.sh arbitrum        # deploy to Arbitrum"

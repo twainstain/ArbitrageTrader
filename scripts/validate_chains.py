@@ -47,7 +47,7 @@ from execution.chain_executor import (
 D = Decimal
 
 # Chains we attempt to validate.
-LIVE_CHAINS = ["arbitrum", "base", "optimism"]
+LIVE_CHAINS = ["arbitrum", "base", "optimism", "polygon"]
 
 # Minimal ABI for reading contract owner and aavePool.
 OWNER_ABI = [
