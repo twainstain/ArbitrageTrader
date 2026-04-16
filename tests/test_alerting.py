@@ -186,22 +186,28 @@ class DiscordTests(unittest.TestCase):
     def test_send_success(self, mock_post):
         mock_post.return_value = MagicMock(status_code=204)
         d = DiscordAlert(webhook_url="https://discord.com/api/webhooks/fake")
-        self.assertTrue(d.send("opportunity_found", "WETH spread", {"pair": "WETH/USDC"}))
+        self.assertTrue(d.send("trade_executed", "profit!", {"pair": "WETH/USDC", "profit": "0.01"}))
         mock_post.assert_called_once()
         payload = mock_post.call_args[1]["json"]
-        self.assertEqual(payload["embeds"][0]["title"], "Opportunity Found")
+        self.assertEqual(payload["embeds"][0]["title"], "Trade Executed")
         self.assertGreater(len(payload["embeds"][0]["fields"]), 0)
 
     @patch("alerting.discord.requests.post")
     def test_send_webhook_error(self, mock_post):
         mock_post.return_value = MagicMock(status_code=429, text="Rate limited")
         d = DiscordAlert(webhook_url="https://discord.com/api/webhooks/fake")
-        self.assertFalse(d.send("test", "msg"))
+        self.assertFalse(d.send("trade_executed", "msg"))
 
     @patch("alerting.discord.requests.post", side_effect=Exception("network"))
     def test_send_network_error(self, mock_post):
         d = DiscordAlert(webhook_url="https://discord.com/api/webhooks/fake")
-        self.assertFalse(d.send("test", "msg"))
+        self.assertFalse(d.send("trade_executed", "msg"))
+
+    def test_filtered_event_returns_true_without_post(self):
+        """Events not in ALLOWED_EVENTS should be silently skipped."""
+        d = DiscordAlert(webhook_url="https://discord.com/api/webhooks/fake")
+        self.assertTrue(d.send("opportunity_found", "WETH spread"))
+        self.assertTrue(d.send("simulation_failed", "reverted"))
 
 
 # ---------------------------------------------------------------

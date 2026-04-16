@@ -83,8 +83,8 @@ class BigWinTelegramTests(_AlertTestBase):
 
 class BigWinDiscordTests(_AlertTestBase):
     @patch("alerting.discord.requests.post")
-    def test_sends_discord_for_big_spread(self, mock_post):
-        mock_post.return_value = MagicMock(status_code=204)
+    def test_discord_skips_opportunity_found(self, mock_post):
+        """Discord should NOT send for opportunity_found (filtered out)."""
         dc = DiscordAlert(webhook_url="https://discord.com/api/webhooks/fake")
         alerter = SmartAlerter(repo=self.repo, telegram=_SAFE_TG, discord=dc, gmail=_SAFE_GM)
 
@@ -93,9 +93,8 @@ class BigWinDiscordTests(_AlertTestBase):
             buy_dex="Uni", sell_dex="Sushi",
             chain="optimism", net_profit=0.02,
         )
-        mock_post.assert_called_once()
-        payload = mock_post.call_args[1]["json"]
-        self.assertIn("BIG SPREAD", payload["embeds"][0]["description"])
+        # Discord filters opportunity_found — should not call requests.post
+        mock_post.assert_not_called()
 
     @patch("alerting.discord.requests.post")
     def test_no_discord_for_small_spread(self, mock_post):
@@ -109,7 +108,8 @@ class BigWinDiscordTests(_AlertTestBase):
         mock_post.assert_not_called()
 
     @patch("requests.post")
-    def test_big_spread_sends_both_telegram_and_discord(self, mock_post):
+    def test_big_spread_sends_telegram_only(self, mock_post):
+        """Big spread sends Telegram alert. Discord skips opportunity_found."""
         mock_post.return_value = MagicMock(status_code=200)
 
         tg = TelegramAlert(bot_token="123:ABC", chat_id="999")
@@ -121,11 +121,10 @@ class BigWinDiscordTests(_AlertTestBase):
             buy_dex="Uni", sell_dex="Sushi",
             chain="arbitrum", net_profit=0.03,
         )
-        # Both Telegram and Discord should have called requests.post.
-        self.assertEqual(mock_post.call_count, 2)
-        urls = [call[0][0] for call in mock_post.call_args_list]
-        self.assertTrue(any("telegram" in u for u in urls))
-        self.assertTrue(any("discord" in u for u in urls))
+        # Only Telegram should call requests.post (Discord filters opportunity_found).
+        self.assertEqual(mock_post.call_count, 1)
+        url = mock_post.call_args_list[0][0][0]
+        self.assertIn("telegram", url)
 
     def test_no_crash_when_discord_unconfigured(self):
         tg = TelegramAlert(bot_token="", chat_id="")
