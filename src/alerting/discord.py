@@ -67,14 +67,28 @@ class DiscordAlert:
         title = event_type.replace("_", " ").title()
 
         # Build embed fields from details dict.
+        # Skip raw URLs (they're in the description) and internal keys.
+        SKIP_FIELDS = {"tx_link", "dashboard_link", "opp_id", "reason_detail",
+                       "fee_included", "chain_min_spread"}
         fields = []
         if details:
             for key, val in details.items():
+                if key in SKIP_FIELDS:
+                    continue
                 fields.append({
                     "name": key.replace("_", " ").title(),
                     "value": str(val),
                     "inline": True,
                 })
+
+        # Add clickable links as dedicated fields at the bottom.
+        if details:
+            tx_link = details.get("tx_link")
+            dash_link = details.get("dashboard_link")
+            if tx_link:
+                fields.append({"name": "Transaction", "value": f"[View on Explorer]({tx_link})", "inline": True})
+            if dash_link:
+                fields.append({"name": "Dashboard", "value": f"[View Details]({dash_link})", "inline": True})
 
         payload = {
             "embeds": [

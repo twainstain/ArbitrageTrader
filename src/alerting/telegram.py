@@ -65,6 +65,16 @@ class TelegramAlert:
         emoji = EVENT_EMOJI.get(event_type, "\U0001f514")  # bell default
         text = f"{emoji} *{event_type.replace('_', ' ').title()}*\n\n{message}"
 
+        # Append clickable links if present in details.
+        if details:
+            links = []
+            if details.get("tx_link"):
+                links.append(f"[View Transaction]({details['tx_link']})")
+            if details.get("dashboard_link"):
+                links.append(f"[View on Dashboard]({details['dashboard_link']})")
+            if links:
+                text += "\n\n" + " | ".join(links)
+
         try:
             resp = requests.post(
                 f"{TELEGRAM_API}/bot{self.bot_token}/sendMessage",

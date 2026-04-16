@@ -79,7 +79,12 @@ class GmailAlert:
             if details:
                 html_body += "<table border='1' cellpadding='4' cellspacing='0'>"
                 for key, val in details.items():
-                    html_body += f"<tr><td><b>{key}</b></td><td>{val}</td></tr>"
+                    # Render URLs as clickable links.
+                    val_str = str(val)
+                    if key in ("tx_link", "dashboard_link") and val_str.startswith("http"):
+                        label = "View Transaction" if key == "tx_link" else "View on Dashboard"
+                        val_str = f'<a href="{val_str}">{label}</a>'
+                    html_body += f"<tr><td><b>{key}</b></td><td>{val_str}</td></tr>"
                 html_body += "</table>"
 
         msg = MIMEMultipart("alternative")
