@@ -107,9 +107,9 @@ cmd_deploy() {
     echo "============================================================"
     echo ""
 
-    # Step 1: Pull
+    # Step 1: Pull (including submodules for trading_platform)
     echo -e "  ${YELLOW}[1/4]${RESET} Pulling latest code..."
-    $SSH_CMD "cd $REMOTE_DIR && git pull origin master 2>&1"
+    $SSH_CMD "cd $REMOTE_DIR && git pull origin master 2>&1 && git submodule update --init --recursive 2>&1"
     echo ""
 
     # Step 2: Build

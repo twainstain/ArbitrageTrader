@@ -42,7 +42,7 @@ jobs:
           pip install lib/trading_platform
 
       - name: Run tests
-        run: PYTHONPATH=src pytest tests/ -q
+        run: PYTHONPATH=src pytest tests/ --ignore=lib/ -q
 
   build-and-push:
     name: Build & Push Docker Image
