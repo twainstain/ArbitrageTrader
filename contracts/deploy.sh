@@ -16,7 +16,7 @@
 #   cd contracts/
 #   ./deploy.sh <chain>
 #
-# Supported chains: ethereum, arbitrum, base
+# Supported chains: ethereum, arbitrum, base, optimism
 #
 # Example:
 #   ./deploy.sh arbitrum        # deploy to Arbitrum (cheapest gas)
@@ -52,6 +52,7 @@ get_aave_pool() {
         ethereum) echo "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2" ;;
         arbitrum) echo "0x794a61358D6845594F94dc1DB02A252b5b4814aD" ;;
         base)     echo "0xA238Dd80C259a72e81d7e4664a9801593F98d1c5" ;;
+        optimism) echo "0x794a61358D6845594F94dc1DB02A252b5b4814aD" ;;
         *)        echo "" ;;
     esac
 }
@@ -62,6 +63,7 @@ get_rpc_url() {
         ethereum) echo "${RPC_ETHEREUM:-}" ;;
         arbitrum) echo "${RPC_ARBITRUM:-}" ;;
         base)     echo "${RPC_BASE:-}" ;;
+        optimism) echo "${RPC_OPTIMISM:-}" ;;
         *)        echo "" ;;
     esac
 }
@@ -76,7 +78,7 @@ fi
 if [[ -z "$CHAIN" ]]; then
     echo "Usage: ./deploy.sh <chain> [--dry]"
     echo ""
-    echo "Supported chains: ethereum, arbitrum, base"
+    echo "Supported chains: ethereum, arbitrum, base, optimism"
     echo ""
     echo "Examples:"
     echo "  ./deploy.sh arbitrum        # deploy to Arbitrum"
