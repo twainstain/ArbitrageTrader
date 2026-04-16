@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from risk.retry import RetryPolicy, execute_with_retry, config_hash
+from platform_adapters import RetryPolicy, execute_with_retry, config_hash
 from data.rpc_failover import RpcProvider
 
 

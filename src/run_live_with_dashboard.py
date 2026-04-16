@@ -64,7 +64,7 @@ from persistence.db import init_db
 from persistence.repository import Repository
 from pipeline.lifecycle import CandidatePipeline
 from risk.policy import RiskPolicy
-from risk.circuit_breaker import CircuitBreaker
+from platform_adapters import CircuitBreaker
 from observability.metrics import MetricsCollector
 from api.app import create_app
 

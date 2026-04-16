@@ -7,7 +7,7 @@ import unittest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from risk.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, BreakerState
+from platform_adapters import CircuitBreaker, CircuitBreakerConfig, BreakerState
 
 
 class BasicStateTests(unittest.TestCase):

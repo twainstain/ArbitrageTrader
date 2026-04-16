@@ -52,7 +52,7 @@ from pipeline.lifecycle import CandidatePipeline
 from pipeline.queue import CandidateQueue
 from pipeline.verifier import OnChainVerifier, VerificationResult
 from registry.monitored_pools import sync_monitored_pools
-from risk.circuit_breaker import CircuitBreaker, CircuitBreakerConfig
+from platform_adapters import CircuitBreaker, CircuitBreakerConfig
 from risk.policy import RiskPolicy
 from strategy.scanner import OpportunityScanner
 from strategy.arb_strategy import ArbitrageStrategy
