@@ -1,5 +1,13 @@
 """HistoricalMarket — replays downloaded price data for backtesting.
 
+PURPOSE: OFFLINE backtesting only. Does NOT use live RPC calls, contracts,
+or token registries. Replays pre-downloaded price snapshots to test strategy
+logic without spending gas or hitting rate limits.
+
+NOT used in production. The live bot uses:
+  - market/onchain_market.py  — live on-chain quotes via RPC (production)
+  - market/live_market.py     — DeFi Llama API quotes (lightweight alternative)
+
 Loads one or more JSON files produced by price_downloader.py and replays
 them tick-by-tick through the bot.  Each call to ``get_quotes()`` advances
 to the next hourly snapshot across all loaded DEX files.

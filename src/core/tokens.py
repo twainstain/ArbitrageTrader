@@ -1,5 +1,24 @@
 """Token address registry for supported chains.
 
+PURPOSE: Single source of truth for ERC-20 token addresses (WETH, USDC, etc.)
+on every supported chain.
+
+IMPORTANT — related files:
+
+  core/contracts.py
+    DEX contract addresses (quoters, routers, factories) for price reading.
+    Uses token addresses from THIS module to build quote calls.
+
+  execution/chain_executor.py
+    Swap router and Aave pool addresses for trade execution.
+    Calls resolve_token_address() from THIS module to build transactions.
+
+When adding a new chain:
+  1. Add token addresses HERE in CHAIN_TOKENS
+  2. Add quoter addresses in core/contracts.py
+  3. Add swap router + Aave pool in execution/chain_executor.py
+  4. Add public RPC fallback in core/contracts.py → PUBLIC_RPC_URLS
+
 This module is the single source of truth for canonical ERC-20 contract
 addresses used throughout the arbitrage bot.  Every market source (LiveMarket,
 OnChainMarket, SubgraphMarket) resolves token addresses through the

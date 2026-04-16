@@ -1,5 +1,33 @@
 """On-chain contract addresses, minimal ABIs, and public RPC URLs for DEX quoters.
 
+PURPOSE: READ-ONLY price quoting. This module provides addresses and ABIs
+for calling DEX quoter contracts (quoteExactInputSingle, getAmountsOut, etc.)
+to fetch prices without executing trades.
+
+IMPORTANT — related files with overlapping contract data:
+
+  core/tokens.py
+    Token (ERC-20) addresses per chain. Used by both this module and
+    the executor to resolve WETH, USDC, etc.
+
+  execution/chain_executor.py
+    EXECUTION-SIDE contract addresses: swap routers (for sending real
+    transactions), Aave V3 pool addresses (for flash loans), and the
+    FlashArbExecutor ABI. These are the addresses the bot sends money to.
+    Swap router addresses MUST match the quoter addresses here — if a
+    DEX quotes via one contract but swaps via another, prices diverge.
+
+  contracts/FlashArbExecutor.sol
+    The Solidity contract that receives the executeArbitrage() call.
+    Supports V3 routers (exactInputSingle) and Solidly-fork routers
+    (Velodrome/Aerodrome swapExactTokensForTokens).
+
+When adding a new chain or DEX:
+  1. Add quoter address HERE (for price reading)
+  2. Add swap router in execution/chain_executor.py (for trade execution)
+  3. Add token addresses in core/tokens.py
+  4. Verify addresses match between quoter and router
+
 This module is the contract-level counterpart to ``tokens.py``.  While
 ``tokens.py`` maps *token* addresses, this file maps *DEX contract* addresses
 (quoters, vaults) and provides the ABI fragments needed to call their

@@ -1,5 +1,34 @@
 """ChainExecutor — sends real on-chain transactions to the FlashArbExecutor contract.
 
+PURPOSE: EXECUTION-SIDE contract wiring. Builds, signs, and sends real
+transactions to the deployed FlashArbExecutor Solidity contract.
+
+IMPORTANT — related files with overlapping contract data:
+
+  core/contracts.py
+    READ-ONLY quoter addresses and ABIs for fetching prices. The quoter
+    address for a DEX (e.g. Uniswap V3 QuoterV2) is different from the
+    swap router address here, but they must reference the same pools.
+
+  core/tokens.py
+    Token addresses. This module calls resolve_token_address() to convert
+    "WETH" → 0x... for the target chain when building transactions.
+
+  contracts/FlashArbExecutor.sol
+    The Solidity contract receiving executeArbitrage() calls. Its ABI is
+    defined in EXECUTOR_ABI below and must match the contract's struct.
+
+  Per-chain contract env vars:
+    EXECUTOR_CONTRACT           — default contract address (Arbitrum/Optimism)
+    EXECUTOR_CONTRACT_BASE      — Base-specific (different Aave pool = different address)
+    EXECUTOR_CONTRACT_<CHAIN>   — any chain override
+
+When adding a new DEX type:
+  1. Add swap router address to SWAP_ROUTERS below
+  2. If Solidly-fork: add factory to VELO_FACTORIES, add router to SWAP_ROUTERS
+  3. Add matching quoter in core/contracts.py for price reading
+  4. Update SUPPORTED_LIVE_DEX_TYPES
+
 This is Phase 3 from the recommendations: the Python bot detects an opportunity,
 then calls the deployed Solidity contract to execute the atomic flash-loan arb.
 
