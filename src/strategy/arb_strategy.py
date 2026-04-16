@@ -299,4 +299,5 @@ class ArbitrageStrategy:
             fees_pre_included=buy_quote.fee_included or sell_quote.fee_included,
             buy_liquidity_usd=buy_quote.liquidity_usd,
             sell_liquidity_usd=sell_quote.liquidity_usd,
+            max_exposure_override=pair_cfg.max_exposure or ZERO,
         )

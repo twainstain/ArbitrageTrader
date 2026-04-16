@@ -432,5 +432,62 @@ class PerChainMinProfitTests(unittest.TestCase):
         self.assertEqual(verdict.reason, "below_min_profit")
 
 
+class PerPairExposureTests(unittest.TestCase):
+    """Tests for per-pair max_exposure_override in exposure limit rule."""
+
+    def test_global_exposure_rejects_large_trade(self) -> None:
+        """Without override, 20000 OP trade exceeds global limit of 10."""
+        policy = RiskPolicy(execution_enabled=True, max_exposure_per_pair=D("10"))
+        opp = _make_opp(trade_size=D("20000"), chain="optimism")
+        verdict = policy.evaluate(opp)
+        self.assertFalse(verdict.approved)
+        self.assertEqual(verdict.reason, "exposure_limit")
+
+    def test_per_pair_override_allows_large_trade(self) -> None:
+        """With max_exposure_override=25000, a 20000 trade passes."""
+        policy = RiskPolicy(execution_enabled=True, max_exposure_per_pair=D("10"))
+        opp = _make_opp(
+            trade_size=D("20000"),
+            chain="optimism",
+            max_exposure_override=D("25000"),
+        )
+        verdict = policy.evaluate(opp)
+        # Should NOT be rejected for exposure_limit.
+        if not verdict.approved:
+            self.assertNotEqual(verdict.reason, "exposure_limit")
+
+    def test_per_pair_override_still_rejects_when_exceeded(self) -> None:
+        """Override of 15000 should still reject a 20000 trade."""
+        policy = RiskPolicy(execution_enabled=True, max_exposure_per_pair=D("10"))
+        opp = _make_opp(
+            trade_size=D("20000"),
+            chain="optimism",
+            max_exposure_override=D("15000"),
+        )
+        verdict = policy.evaluate(opp)
+        self.assertFalse(verdict.approved)
+        self.assertEqual(verdict.reason, "exposure_limit")
+
+    def test_zero_override_uses_global(self) -> None:
+        """max_exposure_override=0 (default) falls back to global limit."""
+        policy = RiskPolicy(execution_enabled=True, max_exposure_per_pair=D("5"))
+        opp = _make_opp(trade_size=D("3"), max_exposure_override=D("0"))
+        verdict = policy.evaluate(opp, current_pair_exposure=D("4"))
+        self.assertFalse(verdict.approved)
+        self.assertEqual(verdict.reason, "exposure_limit")
+
+    def test_override_with_existing_exposure(self) -> None:
+        """Override 30000, current exposure 15000, new trade 20000 → exceeds."""
+        policy = RiskPolicy(execution_enabled=True, max_exposure_per_pair=D("10"))
+        opp = _make_opp(
+            trade_size=D("20000"),
+            chain="optimism",
+            max_exposure_override=D("30000"),
+        )
+        verdict = policy.evaluate(opp, current_pair_exposure=D("15000"))
+        self.assertFalse(verdict.approved)
+        self.assertEqual(verdict.reason, "exposure_limit")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -196,6 +196,89 @@ class AlertFilterTests(unittest.TestCase):
         self.assertEqual(len(result.opportunities), 0)
 
 
+class ChainAwareLiquidityFilterTests(unittest.TestCase):
+    """The $1M min-liquidity filter should be lowered to $100K on L2 chains."""
+
+    def _make_chain_config(self) -> BotConfig:
+        return _make_config(
+            min_profit_base=0.0,
+            dexes=[
+                DexConfig(name="Uni-Arbitrum", base_price=3000.0, fee_bps=0.0,
+                          volatility_bps=0.0, chain="arbitrum"),
+                DexConfig(name="Sushi-Arbitrum", base_price=3050.0, fee_bps=0.0,
+                          volatility_bps=0.0, chain="arbitrum"),
+            ],
+        )
+
+    def test_l2_passes_200k_liquidity(self) -> None:
+        """$200K pool should pass on Arbitrum (L2 threshold is $100K)."""
+        config = self._make_chain_config()
+        scanner = OpportunityScanner(config)
+        quotes = [
+            MarketQuote(dex="Uni-Arbitrum", pair="WETH/USDC", buy_price=3001.0,
+                        sell_price=2999.0, fee_bps=0.0, liquidity_usd=200_000),
+            MarketQuote(dex="Sushi-Arbitrum", pair="WETH/USDC", buy_price=3081.0,
+                        sell_price=3079.0, fee_bps=0.0, liquidity_usd=200_000),
+        ]
+        result = scanner.scan_and_rank(quotes)
+        self.assertGreater(len(result.opportunities), 0)
+
+    def test_l2_rejects_50k_liquidity(self) -> None:
+        """$50K pool should still be rejected on L2 (below $100K threshold)."""
+        config = self._make_chain_config()
+        scanner = OpportunityScanner(config)
+        quotes = [
+            MarketQuote(dex="Uni-Arbitrum", pair="WETH/USDC", buy_price=3001.0,
+                        sell_price=2999.0, fee_bps=0.0, liquidity_usd=50_000),
+            MarketQuote(dex="Sushi-Arbitrum", pair="WETH/USDC", buy_price=3081.0,
+                        sell_price=3079.0, fee_bps=0.0, liquidity_usd=50_000),
+        ]
+        result = scanner.scan_and_rank(quotes)
+        self.assertEqual(len(result.opportunities), 0)
+
+    def test_ethereum_still_requires_1m(self) -> None:
+        """$200K pool should be rejected on Ethereum (threshold stays $1M)."""
+        config = _make_config(
+            min_profit_base=0.0,
+            dexes=[
+                DexConfig(name="Uni-Ethereum", base_price=3000.0, fee_bps=0.0,
+                          volatility_bps=0.0, chain="ethereum"),
+                DexConfig(name="Sushi-Ethereum", base_price=3050.0, fee_bps=0.0,
+                          volatility_bps=0.0, chain="ethereum"),
+            ],
+        )
+        scanner = OpportunityScanner(config)
+        quotes = [
+            MarketQuote(dex="Uni-Ethereum", pair="WETH/USDC", buy_price=3001.0,
+                        sell_price=2999.0, fee_bps=0.0, liquidity_usd=200_000),
+            MarketQuote(dex="Sushi-Ethereum", pair="WETH/USDC", buy_price=3081.0,
+                        sell_price=3079.0, fee_bps=0.0, liquidity_usd=200_000),
+        ]
+        result = scanner.scan_and_rank(quotes)
+        self.assertEqual(len(result.opportunities), 0)
+
+    def test_ethereum_passes_2m_liquidity(self) -> None:
+        """$2M pool should pass on Ethereum."""
+        config = _make_config(
+            min_profit_base=0.0,
+            dexes=[
+                DexConfig(name="Uni-Ethereum", base_price=3000.0, fee_bps=0.0,
+                          volatility_bps=0.0, chain="ethereum"),
+                DexConfig(name="Sushi-Ethereum", base_price=3050.0, fee_bps=0.0,
+                          volatility_bps=0.0, chain="ethereum"),
+            ],
+        )
+        scanner = OpportunityScanner(config)
+        quotes = [
+            MarketQuote(dex="Uni-Ethereum", pair="WETH/USDC", buy_price=3001.0,
+                        sell_price=2999.0, fee_bps=0.0, liquidity_usd=2_000_000),
+            MarketQuote(dex="Sushi-Ethereum", pair="WETH/USDC", buy_price=3081.0,
+                        sell_price=3079.0, fee_bps=0.0, liquidity_usd=2_000_000),
+        ]
+        result = scanner.scan_and_rank(quotes)
+        self.assertGreater(len(result.opportunities), 0)
+
+
 class ScanHistoryTests(unittest.TestCase):
     def test_history_tracks_results(self) -> None:
         config = _make_config()

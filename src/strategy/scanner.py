@@ -121,8 +121,15 @@ class OpportunityScanner:
         _chain_medians = self._compute_chain_medians(quotes)
         # Pre-compute Decimal constants used in the inner loop to avoid
         # repeated object creation (~0.5μs each × 200 iterations = ~0.1ms).
-        _MIN_LIQ = D("1000000")
         _MAX_DEV = D("0.02")
+        # Pre-compute per-chain liquidity thresholds: $1M for Ethereum,
+        # $100K for L2s (legitimate L2 pools are smaller).
+        from core.config import BotConfig as _BC
+        _chain_min_liq: dict[str, Decimal] = {}
+        for dex_cfg in self.config.dexes:
+            ch = dex_cfg.chain or ""
+            if ch and ch not in _chain_min_liq:
+                _chain_min_liq[ch] = _BC.min_liquidity_for_chain(ch)
 
         results: list[Opportunity] = []
         scan_records: list[dict] = []
@@ -197,7 +204,9 @@ class OpportunityScanner:
                     sell_liq = sell_quote.liquidity_usd
                     min_liq = min(buy_liq, sell_liq)
                     max_liq = max(buy_liq, sell_liq)
-                    if min_liq > ZERO and min_liq < _MIN_LIQ:
+                    opp_chain = _dex_chain.get(buy_quote.dex, "")
+                    _min_liq_threshold = _chain_min_liq.get(opp_chain, D("1000000"))
+                    if min_liq > ZERO and min_liq < _min_liq_threshold:
                         skipped_low_liq += 1
                         _record(buy_quote, sell_quote, opp, "low_liquidity")
                         continue

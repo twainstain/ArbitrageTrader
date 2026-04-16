@@ -156,6 +156,9 @@ class Opportunity:
     fees_pre_included: bool = False   # True when DEX fees were already in the quoted prices
     buy_liquidity_usd: Decimal = ZERO   # estimated TVL of the buy-side pool
     sell_liquidity_usd: Decimal = ZERO  # estimated TVL of the sell-side pool
+    # Per-pair exposure limit override (from PairConfig.max_exposure).
+    # When set, the risk policy uses this instead of the global max_exposure_per_pair.
+    max_exposure_override: Decimal = ZERO
 
     def __post_init__(self) -> None:
         _coerce_decimals(self)

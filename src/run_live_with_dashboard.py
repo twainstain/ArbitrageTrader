@@ -303,7 +303,10 @@ def main() -> None:
 
         # Process same-chain opportunities per chain using the full cost model
         # (DEX fees, flash loan fee, slippage, gas) from strategy.evaluate_pair().
+        # Track (pair, buy_dex, sell_dex) to avoid sending the same opportunity
+        # through the pipeline twice (same-chain pass + best-overall pass).
         processed_chains = set()
+        _processed_keys: set[tuple[str, str, str]] = set()
         from strategy.arb_strategy import ArbitrageStrategy
         chain_strategy = ArbitrageStrategy(config, pairs=all_pairs)
 
@@ -319,16 +322,19 @@ def main() -> None:
             # Apply same liquidity filter as the scanner: reject asymmetric
             # or low-liquidity opportunities (catches thin pool false positives).
             from decimal import Decimal as _D
+            from core.config import BotConfig as _BC
             buy_liq = opp.buy_liquidity_usd
             sell_liq = opp.sell_liquidity_usd
             min_liq = min(buy_liq, sell_liq)
             max_liq = max(buy_liq, sell_liq)
-            if min_liq > _D("0") and min_liq < _D("1000000"):
+            _min_liq_threshold = _BC.min_liquidity_for_chain(chain_name)
+            if min_liq > _D("0") and min_liq < _min_liq_threshold:
                 continue
             if min_liq == _D("0") and max_liq > _D("0"):
                 continue
 
             processed_chains.add(chain_name)
+            _processed_keys.add((opp.pair, opp.buy_dex, opp.sell_dex))
             logger.info(
                 "Same-chain [%s]: %s buy=%s sell=%s spread=%.4f%% net=%.6f",
                 chain_name, opp.pair, opp.buy_dex, opp.sell_dex,
@@ -344,7 +350,11 @@ def main() -> None:
         sell_chain = opp.sell_dex.rsplit("-", 1)[-1].lower() if "-" in opp.sell_dex else opp.sell_dex.lower()
         is_cross_chain = buy_chain != sell_chain
 
-        if is_cross_chain:
+        # Skip if already processed by the same-chain pass above.
+        _best_key = (opp.pair, opp.buy_dex, opp.sell_dex)
+        if _best_key in _processed_keys:
+            logger.debug("Best overall already processed in same-chain pass, skipping")
+        elif is_cross_chain:
             logger.info(
                 "Best overall is CROSS-CHAIN: %s buy=%s sell=%s spread=%.4f%%",
                 opp.pair, opp.buy_dex, opp.sell_dex,

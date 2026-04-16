@@ -95,11 +95,19 @@ class PairConfig:
     base_address: str | None = None
     quote_address: str | None = None
     chain: str | None = None
+    # Per-pair exposure limit in base asset units.  When set, overrides
+    # RiskPolicy.max_exposure_per_pair for this pair.  Essential for non-WETH
+    # pairs where the global limit (e.g. 10 WETH) makes no sense in the
+    # pair's native base asset (e.g. 10 OP = $1.26).
+    max_exposure: Decimal | None = None
 
     def __post_init__(self) -> None:
         val = self.trade_size
         if isinstance(val, (int, float)) and not isinstance(val, bool):
             object.__setattr__(self, "trade_size", D(str(val)))
+        me = self.max_exposure
+        if me is not None and isinstance(me, (int, float)) and not isinstance(me, bool):
+            object.__setattr__(self, "max_exposure", D(str(me)))
 
 
 @dataclass(frozen=True)
@@ -164,6 +172,7 @@ class BotConfig:
                     base_address=p.get("base_address"),
                     quote_address=p.get("quote_address"),
                     chain=p.get("chain"),
+                    max_exposure=D(str(p["max_exposure"])) if "max_exposure" in p else None,
                 )
                 for p in data["extra_pairs"]
             ]
@@ -192,6 +201,19 @@ class BotConfig:
         if self.chain_gas_cost and chain in self.chain_gas_cost:
             return D(str(self.chain_gas_cost[chain]))
         return self.estimated_gas_cost_base
+
+    @staticmethod
+    def min_liquidity_for_chain(chain: str) -> Decimal:
+        """Return minimum pool TVL threshold for a chain.
+
+        Ethereum mainnet requires $1M TVL — pools below this have high price
+        impact and are mostly false positives.  L2s (Arbitrum, Base, Optimism)
+        have legitimately smaller pools, so we use $100K.
+        """
+        _L2_CHAINS = {"arbitrum", "base", "optimism", "polygon", "bsc", "avax"}
+        if chain.lower() in _L2_CHAINS:
+            return D("100000")
+        return D("1000000")
 
     def validate(self) -> None:
         """Raise ValueError if any config field is out of acceptable range."""

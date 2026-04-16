@@ -548,8 +548,13 @@ class EventDrivenScanner:
             scan_marks = self.latency_tracker.get_scan_marks() if self.latency_tracker else {}
 
             # Push all actionable opportunities to the queue.
+            # Track (pair, buy_dex, sell_dex) keys to avoid enqueueing the
+            # same opportunity twice (scanner + same-chain pass).
             pushed = 0
+            _seen: set[tuple[str, str, str]] = set()
             for opp in result.opportunities:
+                _key = (opp.pair, opp.buy_dex, opp.sell_dex)
+                _seen.add(_key)
                 # Compute a priority score for queue ordering.
                 score = float(opp.net_profit_base) * (1 + opp.liquidity_score)
                 if self.queue.push(opp, priority=score, scan_marks=scan_marks):
@@ -573,6 +578,11 @@ class EventDrivenScanner:
                 chain_opp = self._chain_strategy.find_best_opportunity(chain_quotes)
                 if chain_opp is None:
                     continue
+                # Skip if already enqueued by the scanner pass.
+                _key = (chain_opp.pair, chain_opp.buy_dex, chain_opp.sell_dex)
+                if _key in _seen:
+                    continue
+                _seen.add(_key)
                 # Duplicate the scanner's liquidity filter here because the
                 # same-chain strategy pass bypasses scanner._find_all_opportunities.
                 # Without this, thin-pool false positives (e.g., Camelot WETH/USDT
@@ -582,15 +592,12 @@ class EventDrivenScanner:
                 sell_liq = chain_opp.sell_liquidity_usd
                 min_liq = min(buy_liq, sell_liq)
                 max_liq = max(buy_liq, sell_liq)
-                if min_liq > D("0") and min_liq < D("1000000"):
+                from core.config import BotConfig as _BC
+                _min_liq_threshold = _BC.min_liquidity_for_chain(chain_name)
+                if min_liq > D("0") and min_liq < _min_liq_threshold:
                     continue
                 if min_liq == D("0") and max_liq > D("0"):
                     continue
-                # Same-chain opportunities get 0.5x priority vs. cross-DEX scanner
-                # results (which get full net_profit as priority).  This deprioritizes
-                # same-chain because they're often the same opportunity found by both
-                # the scanner and the chain-grouping pass — the scanner version has
-                # better ranking metadata.
                 score = float(chain_opp.net_profit_base) * 0.5
                 if self.queue.push(chain_opp, priority=score, scan_marks=scan_marks):
                     pushed += 1

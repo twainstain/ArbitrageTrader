@@ -236,5 +236,118 @@ class FlashLoanProvidersConstTests(unittest.TestCase):
         self.assertIn("balancer", FLASH_LOAN_PROVIDERS)
 
 
+class PairConfigMaxExposureTests(unittest.TestCase):
+    """Tests for PairConfig.max_exposure field."""
+
+    def test_max_exposure_none_by_default(self) -> None:
+        from core.config import PairConfig
+        pc = PairConfig(pair="WETH/USDC", base_asset="WETH",
+                        quote_asset="USDC", trade_size=1.0)
+        self.assertIsNone(pc.max_exposure)
+
+    def test_max_exposure_set_from_float(self) -> None:
+        from core.config import PairConfig
+        from decimal import Decimal
+        pc = PairConfig(pair="OP/USDC", base_asset="OP",
+                        quote_asset="USDC", trade_size=20000.0,
+                        max_exposure=25000.0)
+        self.assertEqual(pc.max_exposure, Decimal("25000.0"))
+
+    def test_max_exposure_parsed_from_json(self) -> None:
+        from decimal import Decimal
+        data = {
+            "pair": "WETH/USDC",
+            "base_asset": "WETH",
+            "quote_asset": "USDC",
+            "trade_size": 1.0,
+            "min_profit_base": 0.01,
+            "estimated_gas_cost_base": 0.003,
+            "flash_loan_fee_bps": 9.0,
+            "slippage_bps": 10.0,
+            "poll_interval_seconds": 0.5,
+            "extra_pairs": [
+                {
+                    "pair": "OP/USDC",
+                    "base_asset": "OP",
+                    "quote_asset": "USDC",
+                    "trade_size": 20000,
+                    "chain": "optimism",
+                    "max_exposure": 25000,
+                }
+            ],
+            "dexes": [
+                {"name": "A", "base_price": 3000.0, "fee_bps": 30.0, "volatility_bps": 10.0},
+                {"name": "B", "base_price": 3050.0, "fee_bps": 30.0, "volatility_bps": 10.0},
+            ],
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            f.flush()
+            config = BotConfig.from_file(f.name)
+
+        pair = config.extra_pairs[0]
+        self.assertEqual(pair.max_exposure, Decimal("25000"))
+
+    def test_max_exposure_absent_in_json_is_none(self) -> None:
+        data = {
+            "pair": "WETH/USDC",
+            "base_asset": "WETH",
+            "quote_asset": "USDC",
+            "trade_size": 1.0,
+            "min_profit_base": 0.01,
+            "estimated_gas_cost_base": 0.003,
+            "flash_loan_fee_bps": 9.0,
+            "slippage_bps": 10.0,
+            "poll_interval_seconds": 0.5,
+            "extra_pairs": [
+                {
+                    "pair": "WETH/USDT",
+                    "base_asset": "WETH",
+                    "quote_asset": "USDT",
+                    "trade_size": 1.0,
+                }
+            ],
+            "dexes": [
+                {"name": "A", "base_price": 3000.0, "fee_bps": 30.0, "volatility_bps": 10.0},
+                {"name": "B", "base_price": 3050.0, "fee_bps": 30.0, "volatility_bps": 10.0},
+            ],
+        }
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(data, f)
+            f.flush()
+            config = BotConfig.from_file(f.name)
+
+        pair = config.extra_pairs[0]
+        self.assertIsNone(pair.max_exposure)
+
+
+class MinLiquidityForChainTests(unittest.TestCase):
+    """Tests for BotConfig.min_liquidity_for_chain() static method."""
+
+    def test_ethereum_returns_1m(self) -> None:
+        from decimal import Decimal
+        self.assertEqual(BotConfig.min_liquidity_for_chain("ethereum"), Decimal("1000000"))
+
+    def test_arbitrum_returns_100k(self) -> None:
+        from decimal import Decimal
+        self.assertEqual(BotConfig.min_liquidity_for_chain("arbitrum"), Decimal("100000"))
+
+    def test_base_returns_100k(self) -> None:
+        from decimal import Decimal
+        self.assertEqual(BotConfig.min_liquidity_for_chain("base"), Decimal("100000"))
+
+    def test_optimism_returns_100k(self) -> None:
+        from decimal import Decimal
+        self.assertEqual(BotConfig.min_liquidity_for_chain("optimism"), Decimal("100000"))
+
+    def test_unknown_chain_returns_1m(self) -> None:
+        from decimal import Decimal
+        self.assertEqual(BotConfig.min_liquidity_for_chain("zksync"), Decimal("1000000"))
+
+    def test_case_insensitive(self) -> None:
+        from decimal import Decimal
+        self.assertEqual(BotConfig.min_liquidity_for_chain("Arbitrum"), Decimal("100000"))
+
+
 if __name__ == "__main__":
     unittest.main()

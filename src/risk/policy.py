@@ -231,12 +231,20 @@ class RiskPolicy:
             return RiskVerdict(False, "rate_limit_exceeded", analysis)
 
         # Rule 7: Exposure limit
+        # Use per-pair override when set (essential for non-WETH pairs like
+        # OP/USDC where the global limit of 10 WETH makes no sense).
+        effective_max_exposure = (
+            opportunity.max_exposure_override
+            if opportunity.max_exposure_override > ZERO
+            else self.max_exposure_per_pair
+        )
         new_exposure = current_pair_exposure + opportunity.trade_size
-        if new_exposure > self.max_exposure_per_pair:
+        if new_exposure > effective_max_exposure:
             analysis["reason_detail"] = (
-                f"Exposure would be {new_exposure} (max {self.max_exposure_per_pair}). "
+                f"Exposure would be {new_exposure} (max {effective_max_exposure}). "
                 f"Current exposure: {current_pair_exposure}."
             )
+            analysis["effective_max_exposure"] = str(effective_max_exposure)
             return RiskVerdict(False, "exposure_limit", analysis)
 
         # All rules passed.
