@@ -121,7 +121,7 @@ SWAP_ROUTERS: dict[str, dict[str, str]] = {
     },
     "optimism": {
         "uniswap_v3": "0xE592427A0AEce92De3Edee1F18E0157C05861564",
-        "sushi_v3": "0x8A21F6768C1f8075791D08546Dadf6daA0bE820c",
+        "sushi_v3": "0xFB7eF66a7e61224DD6FcD0D7d9C3be5C8B049b9f",
         "velodrome_v2": "0xa062aE8A9c5e11aaA026fc2670B0D65cCc8B2858",
     },
     "bsc": {
