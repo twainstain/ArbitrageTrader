@@ -248,7 +248,7 @@ class OnChainMarket:
                 self._rpc_index[chain] = 0
                 self._w3[chain] = Web3(Web3.HTTPProvider(
                     urls[0],
-                    request_kwargs={"timeout": 8},
+                    request_kwargs={"timeout": 3},
                     session=self._session_for(chain),
                 ))
 
@@ -309,7 +309,7 @@ class OnChainMarket:
         new_url = urls[idx]
         self._w3[chain] = Web3(Web3.HTTPProvider(
             new_url,
-            request_kwargs={"timeout": 8},
+            request_kwargs={"timeout": 3},
             session=self._session_for(chain),
         ))
         _logger.info("RPC failover for %s → %s", chain, new_url[:50])
@@ -347,20 +347,69 @@ class OnChainMarket:
             except Exception:
                 pass  # Cached tier failed — fall through to full sweep.
 
-        # Full sweep — try all tiers, cache the best.
-        best_out = 0
-        best_fee = 0
-        for fee in fee_tiers:
-            try:
-                out = _call_tier(fee)
-                if out > best_out:
-                    best_out = out
-                    best_fee = fee
-            except Exception:
-                continue
+        # Full sweep — batch all fee tiers through Multicall3 so the cache
+        # miss costs 1 RPC roundtrip instead of len(fee_tiers). Falls back
+        # to the sequential path if the batched call fails for any reason
+        # (Multicall3 not deployed on the chain, RPC quirk, etc.).
+        best_out, best_fee = self._fee_tier_sweep_multicall(
+            quoter, weth_cs, usdc_cs, amount_in, fee_tiers,
+        )
+        if best_out == 0:
+            for fee in fee_tiers:
+                try:
+                    out = _call_tier(fee)
+                    if out > best_out:
+                        best_out = out
+                        best_fee = fee
+                except Exception:
+                    continue
         if best_out > 0:
             self._best_fee[cache_key] = (best_fee, _time.monotonic())
         return best_out, best_fee
+
+    def _fee_tier_sweep_multicall(
+        self, quoter, weth_cs: str, usdc_cs: str,
+        amount_in: int, fee_tiers: tuple[int, ...],
+    ) -> tuple[int, int]:
+        """Probe every fee tier in a single Multicall3 batch.
+
+        Returns ``(best_amount_out, winning_fee_tier)``. Returns ``(0, 0)``
+        on any error so the caller falls back to the sequential path.
+        """
+        try:
+            from market.multicall import aggregate3
+            target = quoter.address
+            calls = [
+                (
+                    target,
+                    quoter.encodeABI(
+                        fn_name="quoteExactInputSingle",
+                        args=[(weth_cs, usdc_cs, amount_in, fee, 0)],
+                    ),
+                )
+                for fee in fee_tiers
+            ]
+            # Use the same w3 instance as the quoter; encodeABI doesn't
+            # care which provider, but aggregate3 needs the chain's w3.
+            results = aggregate3(quoter.w3, calls, allow_failure=True)
+            best_out = 0
+            best_fee = 0
+            for fee, (success, return_data) in zip(fee_tiers, results):
+                if not success or not return_data:
+                    continue
+                try:
+                    decoded = quoter.decode_function_result(
+                        "quoteExactInputSingle", return_data,
+                    )
+                    out = decoded[0] if isinstance(decoded, (list, tuple)) else decoded
+                except Exception:
+                    continue
+                if out > best_out:
+                    best_out = int(out)
+                    best_fee = fee
+            return best_out, best_fee
+        except Exception:
+            return 0, 0
 
     # ------------------------------------------------------------------
     # Public interface
@@ -533,13 +582,13 @@ class OnChainMarket:
             fut = self._pool.submit(_timed_fetch, dex, pair_def, key)
             futures[fut] = (dex, pair_def, cache_dex, chain, key)
 
-        # Hard 15s deadline on ALL RPC calls.  Added after production
-        # incidents where web3.py eth_call ignored the HTTP timeout
-        # (8s per request_kwargs) and blocked the entire thread pool
-        # indefinitely.  15s = enough for 2 retries on slow chains
-        # (Alchemy P99 ~2s), short enough to keep scan cadence <30s.
+        # Hard 8s deadline on ALL RPC calls. Per-call timeout is now 3s
+        # (request_kwargs), so 8s covers 2 retries (~6s) plus headroom.
+        # Was 15s; tightened after per-quoter data showed prod's slowest
+        # single quoter hit p95 ~10s (which proved to be 8s timeout +
+        # 1 retry + jitter). With per-call 3s the natural ceiling is ~6s.
         # See commit 0d8e09b ("fix: 15s hard deadline with pool.shutdown").
-        done, not_done = concurrent.futures.wait(futures, timeout=15)
+        done, not_done = concurrent.futures.wait(futures, timeout=8)
 
         # Collect per-quoter timings for the structured-log event below.
         per_quoter: list[dict] = []
@@ -572,6 +621,9 @@ class OnChainMarket:
             elapsed_ms = worker_timings.get(key, 0.0)
             try:
                 quotes.append(future.result())
+                # Reset escalating-failure counter so a recovered quoter
+                # doesn't stay penalised by the long TTL forever.
+                cache.mark_success(dex.name, chain)  # type: ignore[union-attr]
                 if self.diagnostics:
                     from observability.quote_diagnostics import QuoteOutcome
                     self.diagnostics.record(

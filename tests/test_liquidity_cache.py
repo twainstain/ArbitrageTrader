@@ -10,6 +10,47 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from data.liquidity_cache import LiquidityCache
 
 
+class FailureEscalationTests(unittest.TestCase):
+    """After repeated failures, the cache escalates TTL so we stop
+    re-checking known-broken quoters every 15min."""
+
+    def test_consecutive_failures_escalate_ttl(self):
+        cache = LiquidityCache(ttl_seconds=60)  # 1-minute baseline
+        # Below threshold: baseline TTL.
+        for _ in range(LiquidityCache._FAILURE_ESCALATION_THRESHOLD - 1):
+            cache.mark_skip("bad-dex", "optimism", "rpc fail")
+            # Force re-cache by clearing the entry between calls so each
+            # mark_skip writes a fresh entry (simulates TTL expiry).
+            cache._cache.clear()
+        cache.mark_skip("bad-dex", "optimism", "rpc fail")
+        cache._cache.clear()
+        cache.mark_skip("bad-dex", "optimism", "rpc fail")  # threshold-th fail
+        # Last entry should carry the escalated 1-hour TTL.
+        entry = cache._cache[LiquidityCache._key("bad-dex", "optimism")]
+        self.assertEqual(entry.ttl, LiquidityCache._ESCALATED_TTL)
+
+    def test_success_resets_failure_counter(self):
+        cache = LiquidityCache(ttl_seconds=60)
+        for _ in range(LiquidityCache._FAILURE_ESCALATION_THRESHOLD):
+            cache.mark_skip("flaky", "base", "rpc fail")
+            cache._cache.clear()
+        # Recovery: a success resets the counter.
+        cache.mark_success("flaky", "base")
+        cache.mark_skip("flaky", "base", "rpc fail")
+        entry = cache._cache[LiquidityCache._key("flaky", "base")]
+        # First failure after success → baseline TTL, NOT escalated.
+        self.assertEqual(entry.ttl, 60)
+
+    def test_ttl_override_wins_over_escalation(self):
+        cache = LiquidityCache(ttl_seconds=60)
+        for _ in range(LiquidityCache._FAILURE_ESCALATION_THRESHOLD + 1):
+            cache.mark_skip("x", "y", "fail")
+            cache._cache.clear()
+        cache.mark_skip("x", "y", "transient", ttl_override=15)
+        entry = cache._cache[LiquidityCache._key("x", "y")]
+        self.assertEqual(entry.ttl, 15)
+
+
 class BasicCacheTests(unittest.TestCase):
     """Core cache behavior."""
 

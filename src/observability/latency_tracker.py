@@ -97,7 +97,11 @@ def iter_json_records(path: str | Path):
                 return
             i = nxt
             continue
-        yield obj
+        # Only yield dict records — handles truncated streams (e.g. file
+        # tailed mid-record) where raw_decode might pick up a bare string
+        # or number from inside a partial object.
+        if isinstance(obj, dict):
+            yield obj
         i = end
 
 

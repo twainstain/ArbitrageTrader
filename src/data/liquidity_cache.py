@@ -52,9 +52,18 @@ class LiquidityCache:
     returns zero, it gets re-cached.
     """
 
+    # When a (dex, chain) fails this many times in a row, escalate its
+    # cache TTL so we don't keep re-checking a known-broken endpoint every
+    # 15 minutes. Mostly affects local dev (where public RPCs reject the
+    # quoter call) and chains with degraded paid endpoints — saves the
+    # ~timeout × N cost per scan that would otherwise repeat indefinitely.
+    _FAILURE_ESCALATION_THRESHOLD = 5
+    _ESCALATED_TTL = 60 * 60  # 1 hour
+
     def __init__(self, ttl_seconds: float = DEFAULT_TTL) -> None:
         self._ttl = ttl_seconds
         self._cache: dict[str, CacheEntry] = {}
+        self._consecutive_failures: dict[str, int] = {}
         self._lock = threading.Lock()
         self._total_skips = 0
 
@@ -83,10 +92,21 @@ class LiquidityCache:
         Args:
             ttl_override: Custom TTL in seconds. If None, uses the default.
                           Use shorter TTL for transient errors (timeout, rate limit).
+
+        After ``_FAILURE_ESCALATION_THRESHOLD`` consecutive failures (with no
+        intervening success) the TTL is escalated to ``_ESCALATED_TTL`` to
+        avoid re-checking known-broken quoters every 15min.
         """
         key = self._key(dex, chain)
-        entry_ttl = ttl_override if ttl_override is not None else self._ttl
         with self._lock:
+            self._consecutive_failures[key] = self._consecutive_failures.get(key, 0) + 1
+            failures = self._consecutive_failures[key]
+            if ttl_override is not None:
+                entry_ttl = ttl_override
+            elif failures >= self._FAILURE_ESCALATION_THRESHOLD:
+                entry_ttl = self._ESCALATED_TTL
+            else:
+                entry_ttl = self._ttl
             existing = self._cache.get(key)
             if existing and not existing.expired:
                 return  # Already cached
@@ -94,8 +114,24 @@ class LiquidityCache:
                 dex=dex, chain=chain, reason=reason,
                 cached_at=time.monotonic(), ttl=entry_ttl,
             )
-        logger.info("Cached skip: %s on %s (%s) — TTL %.0fm",
-                     dex, chain, reason, self._ttl / 60)
+        if failures >= self._FAILURE_ESCALATION_THRESHOLD:
+            logger.warning("Cached skip (ESCALATED): %s on %s (%s) — TTL %.0fm "
+                           "after %d consecutive failures",
+                           dex, chain, reason, entry_ttl / 60, failures)
+        else:
+            logger.info("Cached skip: %s on %s (%s) — TTL %.0fm",
+                         dex, chain, reason, entry_ttl / 60)
+
+    def mark_success(self, dex: str, chain: str) -> None:
+        """Reset the consecutive-failure counter for a (dex, chain).
+
+        Call from the quoter success path so a quoter that recovers from
+        a transient outage isn't permanently demoted to the escalated TTL.
+        """
+        key = self._key(dex, chain)
+        with self._lock:
+            if key in self._consecutive_failures:
+                self._consecutive_failures[key] = 0
 
     def clear(self) -> None:
         """Clear all cached entries."""
