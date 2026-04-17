@@ -105,8 +105,13 @@ def _data_logger() -> logging.Logger:
 # ---------------------------------------------------------------------------
 
 def _json_dumps(obj: object) -> str:
-    """Serialize to JSON, handling Decimal values."""
-    return json.dumps(obj, cls=_DecimalEncoder)
+    """Serialize to JSON, handling Decimal values.
+
+    Pretty-printed with indent=2 so files are readable by eye when tailing.
+    Multiple records are still parseable as a stream — see
+    observability.latency_tracker.iter_json_records().
+    """
+    return json.dumps(obj, cls=_DecimalEncoder, indent=2)
 
 
 def _quote_to_dict(q: MarketQuote) -> dict:

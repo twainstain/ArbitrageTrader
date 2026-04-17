@@ -132,14 +132,8 @@ def analyze_jsonl(filepath: str | Path) -> PerfReport:
     if not path.exists():
         return report
 
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
+    from observability.latency_tracker import iter_json_records
+    for record in iter_json_records(path):
         event = record.get("event")
 
         if event == "scan":

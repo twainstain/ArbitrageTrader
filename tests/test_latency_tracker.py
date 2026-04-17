@@ -30,28 +30,31 @@ class LatencyTrackerTests(unittest.TestCase):
             status="rejected",
             pipeline_timings={"detect_ms": "0.5", "price_ms": "0.3", "total_ms": "1.2"},
         )
-        # Read file.
-        lines = Path(self.tmp.name).read_text().strip().splitlines()
-        self.assertEqual(len(lines), 1)
-        record = json.loads(lines[0])
-        self.assertEqual(record["opp_id"], "opp_test123")
+        # Read file via the streaming parser (handles indent=2 stream).
+        from observability.latency_tracker import iter_json_records
+        records = list(iter_json_records(self.tmp.name))
+        self.assertEqual(len(records), 1)
+        record = records[0]
+        self.assertEqual(record["opportunity_id"], "opp_test123")
+        self.assertEqual(record["event"], "pipeline_complete")
         self.assertEqual(record["chain"], "ethereum")
         self.assertEqual(record["spread_pct"], 0.15)
         self.assertIn("rpc_fetch", record["scan_marks_ms"])
         self.assertIn("detect_ms", record["pipeline_ms"])
 
     def test_records_scan_summary(self):
+        from observability.latency_tracker import iter_json_records
         self.tracker.start_scan()
         self.tracker.mark("rpc_fetch")
         self.tracker.mark("scanner")
         self.tracker.record_scan_summary(quote_count=10, opp_count=5)
-        lines = Path(self.tmp.name).read_text().strip().splitlines()
-        record = json.loads(lines[0])
-        self.assertEqual(record["type"], "scan_summary")
+        record = list(iter_json_records(self.tmp.name))[0]
+        self.assertEqual(record["event"], "scan_summary")
         self.assertEqual(record["quote_count"], 10)
         self.assertIn("rpc_fetch", record["scan_marks_ms"])
 
     def test_multiple_scans(self):
+        from observability.latency_tracker import iter_json_records
         for i in range(3):
             self.tracker.start_scan()
             self.tracker.record_pipeline(
@@ -60,10 +63,11 @@ class LatencyTrackerTests(unittest.TestCase):
                 spread_pct=float(i), net_profit=0.001,
                 status="rejected", pipeline_timings={"total_ms": str(i)},
             )
-        lines = Path(self.tmp.name).read_text().strip().splitlines()
-        self.assertEqual(len(lines), 3)
+        records = list(iter_json_records(self.tmp.name))
+        self.assertEqual(len(records), 3)
 
     def test_scan_index_increments(self):
+        from observability.latency_tracker import iter_json_records
         self.tracker.start_scan()
         self.tracker.record_pipeline(
             opp_id="opp_1", pair="WETH/USDC", chain="ethereum",
@@ -76,25 +80,23 @@ class LatencyTrackerTests(unittest.TestCase):
             buy_dex="A", sell_dex="B", spread_pct=2.0, net_profit=0.02,
             status="rejected", pipeline_timings={"total_ms": "2"},
         )
-        lines = Path(self.tmp.name).read_text().strip().splitlines()
-        r1 = json.loads(lines[0])
-        r2 = json.loads(lines[1])
-        self.assertEqual(r1["scan_index"], 1)
-        self.assertEqual(r2["scan_index"], 2)
+        records = list(iter_json_records(self.tmp.name))
+        self.assertEqual(records[0]["scan_index"], 1)
+        self.assertEqual(records[1]["scan_index"], 2)
 
     def test_marks_are_cumulative(self):
+        from observability.latency_tracker import iter_json_records
         self.tracker.start_scan()
-        import time
         self.tracker.mark("step1")
         self.tracker.mark("step2")
         self.tracker.record_scan_summary(quote_count=5, opp_count=1)
-        lines = Path(self.tmp.name).read_text().strip().splitlines()
-        record = json.loads(lines[0])
+        record = list(iter_json_records(self.tmp.name))[0]
         marks = record["scan_marks_ms"]
         # step2 should be >= step1 (cumulative from scan start)
         self.assertGreaterEqual(marks["step2"], marks["step1"])
 
     def test_per_chain_tracking(self):
+        from observability.latency_tracker import iter_json_records
         self.tracker.start_scan()
         for chain in ["ethereum", "arbitrum", "optimism"]:
             self.tracker.record_pipeline(
@@ -103,8 +105,7 @@ class LatencyTrackerTests(unittest.TestCase):
                 spread_pct=1.0, net_profit=0.005,
                 status="rejected", pipeline_timings={"total_ms": "1"},
             )
-        lines = Path(self.tmp.name).read_text().strip().splitlines()
-        chains = [json.loads(l)["chain"] for l in lines]
+        chains = [r["chain"] for r in iter_json_records(self.tmp.name)]
         self.assertEqual(chains, ["ethereum", "arbitrum", "optimism"])
 
 

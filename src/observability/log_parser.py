@@ -47,17 +47,13 @@ def _n(val: object) -> float:
 
 
 def parse_log(filepath: str | Path) -> list[dict]:
-    """Read a JSONL file and return a list of event dicts."""
-    records = []
-    for line in Path(filepath).read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
-    return records
+    """Read a JSON record file and return a list of event dicts.
+
+    Handles both the old single-line-per-record format and the current
+    pretty-printed-stream format via observability.latency_tracker.iter_json_records.
+    """
+    from observability.latency_tracker import iter_json_records
+    return list(iter_json_records(filepath))
 
 
 def format_scan(record: dict, show_quotes: bool = False) -> str:

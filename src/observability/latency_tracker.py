@@ -34,6 +34,72 @@ from threading import Lock
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _LATENCY_FILE = _PROJECT_ROOT / "logs" / "latency.jsonl"
 
+# Module-level append lock for write_event(). The LatencyTracker class uses
+# its own per-instance lock + file handle; write_event() is a lighter-weight
+# entry point for one-off structured events from anywhere in the codebase
+# (e.g. per-quoter timings from onchain_market). Using a single shared lock
+# means events from different call sites don't interleave on a partial line.
+_EVENT_LOCK = Lock()
+
+
+def write_event(event: dict) -> None:
+    """Append a single structured event to latency.jsonl.
+
+    Schema convention enforced here:
+      - `event` field comes first (event-name discriminator)
+      - `timestamp` (ISO 8601 UTC) is added if not present
+      - rest of payload follows
+
+    Caller passes `event` (e.g. {"event": "quoter_timings", ...}). Legacy
+    callers that used `type` are auto-migrated to `event`. Best-effort —
+    failures are swallowed so observability never blocks a scan.
+    """
+    try:
+        rec = dict(event)
+        # Migrate legacy `type` callers to the canonical `event` field.
+        if "event" not in rec and "type" in rec:
+            rec["event"] = rec.pop("type")
+        rec.setdefault("timestamp", datetime.now(timezone.utc).isoformat())
+        # Reorder so `event` and `timestamp` lead — easier to scan by eye.
+        head = {k: rec[k] for k in ("event", "timestamp") if k in rec}
+        body = {k: v for k, v in rec.items() if k not in head}
+        ordered = {**head, **body}
+        chunk = json.dumps(ordered, indent=2) + "\n"
+        _LATENCY_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with _EVENT_LOCK:
+            with open(_LATENCY_FILE, "a", encoding="utf-8") as fh:
+                fh.write(chunk)
+    except Exception:
+        pass
+
+
+def iter_json_records(path: str | Path):
+    """Stream-parse a JSONL or pretty-printed-JSON-stream file.
+
+    Backward compatible: handles the old single-line-per-record format AND
+    the new indent=2 multi-line format that ships from this module. Yields
+    one decoded dict per top-level JSON object.
+    """
+    text = Path(path).read_text(encoding="utf-8")
+    decoder = json.JSONDecoder()
+    i, n = 0, len(text)
+    while i < n:
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n:
+            return
+        try:
+            obj, end = decoder.raw_decode(text, i)
+        except json.JSONDecodeError:
+            # Skip a malformed chunk — find the next '{' and try again.
+            nxt = text.find("{", i + 1)
+            if nxt < 0:
+                return
+            i = nxt
+            continue
+        yield obj
+        i = end
+
 
 @dataclass
 class ScanTiming:
@@ -104,9 +170,10 @@ class LatencyTracker:
         with self._lock:
             total_scan_ms = (time.monotonic() - self._scan.started_at) * 1000
             record = {
+                "event": "pipeline_complete",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "scan_index": self._scan.scan_index,
-                "opp_id": opp_id,
+                "opportunity_id": opp_id,
                 "pair": pair,
                 "chain": chain,
                 "buy_dex": buy_dex,
@@ -119,7 +186,7 @@ class LatencyTracker:
                 "total_scan_to_result_ms": round(total_scan_ms, 2),
             }
         # File I/O outside lock — won't block other threads.
-        self._file.write(json.dumps(record) + "\n")
+        self._file.write(json.dumps(record, indent=2) + "\n")
         self._file.flush()
 
     def record_scan_summary(
@@ -141,8 +208,8 @@ class LatencyTracker:
         with self._lock:
             total_ms = (time.monotonic() - self._scan.started_at) * 1000
             record = {
+                "event": "scan_summary",
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-                "type": "scan_summary",
                 "scan_index": self._scan.scan_index,
                 "quote_count": quote_count,
                 "opportunity_count": opp_count,
@@ -151,7 +218,7 @@ class LatencyTracker:
                 "scan_marks_ms": dict(self._scan.marks),
                 "total_scan_ms": round(total_ms, 2),
             }
-        self._file.write(json.dumps(record) + "\n")
+        self._file.write(json.dumps(record, indent=2) + "\n")
         self._file.flush()
 
     def close(self) -> None:
@@ -168,18 +235,20 @@ def analyze_latency(filepath: str | Path | None = None) -> None:
         print(f"No latency file found at {path}")
         return
 
-    records = []
-    for line in path.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            records.append(json.loads(line))
-        except json.JSONDecodeError:
-            continue
+    records = list(iter_json_records(path))
 
-    # Separate pipeline records from scan summaries.
-    pipelines = [r for r in records if "opp_id" in r]
-    summaries = [r for r in records if r.get("type") == "scan_summary"]
+    # Backward compat: old records used `type` discriminator and `opp_id`
+    # field. Current schema uses `event` and `opportunity_id` (see
+    # write_event for the rationale). Accept either when reading.
+    def _event_of(r: dict) -> str | None:
+        return r.get("event") or r.get("type")
+
+    def _opp_id(r: dict) -> str | None:
+        return r.get("opportunity_id") or r.get("opp_id")
+
+    pipelines = [r for r in records
+                 if _event_of(r) == "pipeline_complete" or _opp_id(r) is not None]
+    summaries = [r for r in records if _event_of(r) == "scan_summary"]
 
     if not pipelines:
         print("No pipeline records found.")
@@ -241,7 +310,8 @@ def analyze_latency(filepath: str | Path | None = None) -> None:
     print(f"\n  Slowest Pipeline Executions:")
     slowest = sorted(pipelines, key=lambda r: r.get("pipeline_ms", {}).get("total_ms", 0), reverse=True)[:5]
     for r in slowest:
-        print(f"  {r.get('opp_id','?')[:16]}  chain={r.get('chain','?'):<10s}  "
+        opp_id_str = (_opp_id(r) or "?")[:16]
+        print(f"  {opp_id_str}  chain={r.get('chain','?'):<10s}  "
               f"total={r.get('pipeline_ms',{}).get('total_ms',0):.1f}ms  "
               f"spread={r.get('spread_pct',0):.2f}%")
 

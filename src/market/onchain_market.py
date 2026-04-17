@@ -197,6 +197,10 @@ class OnChainMarket:
         self._w3: dict[str, Web3] = {}
         self._rpc_urls: dict[str, list[str]] = {}  # chain → list of URLs for failover
         self._rpc_index: dict[str, int] = {}  # chain → current URL index
+        # One requests.Session per chain so the underlying urllib3 pool can
+        # reuse TCP+TLS connections across the dozens of eth_calls per scan.
+        # Without this, each Web3 call paid a fresh TLS handshake (~50-200ms).
+        self._sessions: dict[str, "requests.Session"] = {}
         # Cache best fee tier per (dex_type, chain) — avoids trying all 4 tiers each scan.
         self._best_fee: dict[str, tuple[int, float]] = {}  # key → (fee, timestamp)
         # Cache liquidity estimates — avoids extra RPC calls for _estimate_liquidity_usd.
@@ -242,7 +246,11 @@ class OnChainMarket:
                     urls.append(PUBLIC_RPC_URLS[chain])
                 self._rpc_urls[chain] = urls
                 self._rpc_index[chain] = 0
-                self._w3[chain] = Web3(Web3.HTTPProvider(urls[0], request_kwargs={"timeout": 8}))
+                self._w3[chain] = Web3(Web3.HTTPProvider(
+                    urls[0],
+                    request_kwargs={"timeout": 8},
+                    session=self._session_for(chain),
+                ))
 
     def _resolve_pair_address(
         self,
@@ -267,6 +275,26 @@ class OnChainMarket:
     def _price_from_amount_out(amount_out: int, quote_symbol: str) -> Decimal:
         return D(amount_out) / D(10 ** token_decimals(quote_symbol))
 
+    def _build_session(self, chain: str) -> "requests.Session":
+        """Return a requests.Session with HTTP keep-alive + per-host pool.
+
+        pool_maxsize ~= the per-chain quoter concurrency. Each chain has at
+        most ~5-8 DEX × pairs scans in parallel; 32 covers the upper bound
+        with headroom and avoids urllib3 'connection pool full' warnings.
+        """
+        import requests
+        from requests.adapters import HTTPAdapter
+        sess = requests.Session()
+        adapter = HTTPAdapter(pool_connections=8, pool_maxsize=32, max_retries=0)
+        sess.mount("https://", adapter)
+        sess.mount("http://", adapter)
+        return sess
+
+    def _session_for(self, chain: str) -> "requests.Session":
+        if chain not in self._sessions:
+            self._sessions[chain] = self._build_session(chain)
+        return self._sessions[chain]
+
     def _rotate_rpc(self, chain: str) -> None:
         """Rotate to the next RPC endpoint for a chain after a failure.
 
@@ -279,7 +307,11 @@ class OnChainMarket:
         idx = (self._rpc_index.get(chain, 0) + 1) % len(urls)
         self._rpc_index[chain] = idx
         new_url = urls[idx]
-        self._w3[chain] = Web3(Web3.HTTPProvider(new_url, request_kwargs={"timeout": 8}))
+        self._w3[chain] = Web3(Web3.HTTPProvider(
+            new_url,
+            request_kwargs={"timeout": 8},
+            session=self._session_for(chain),
+        ))
         _logger.info("RPC failover for %s → %s", chain, new_url[:50])
 
     def _try_fee_tiers(
@@ -340,6 +372,12 @@ class OnChainMarket:
         Each DEX quote is an independent RPC call, so parallel fetching
         reduces total latency from sum(latencies) to max(latencies).
         """
+        # Per-future timing collected by the worker itself. Measuring at the
+        # main thread's collect-time would yield identical values across all
+        # futures (they all "complete" the moment we wake from wait()), which
+        # tells us nothing about per-quoter cost. We need worker wallclock.
+        worker_timings: dict[object, float] = {}
+
         def _fetch_one(dex: object, pair_def: _PairDef) -> MarketQuote:
             chain = dex.chain  # type: ignore[union-attr]
             dex_type = dex.dex_type  # type: ignore[union-attr]
@@ -453,6 +491,14 @@ class OnChainMarket:
                 liquidity_usd=estimated_tvl,
             )
 
+        def _timed_fetch(dex: object, pair_def: _PairDef, future_key: tuple) -> MarketQuote:
+            """Wrap _fetch_one to record actual worker wallclock time."""
+            t0 = _time.monotonic()
+            try:
+                return _fetch_one(dex, pair_def)
+            finally:
+                worker_timings[future_key] = (_time.monotonic() - t0) * 1000.0
+
         # Fetch all DEX quotes in parallel.
         # Failed DEXs are logged and skipped — one bad RPC shouldn't kill the scan.
         # Low-liquidity pairs are cached and skipped for 3 hours.
@@ -479,10 +525,14 @@ class OnChainMarket:
             _logger.warning("All DEXes cached as low-liquidity — returning empty quotes")
             return quotes
 
-        futures = {
-            self._pool.submit(_fetch_one, dex, pair_def): (dex, pair_def, cache_dex, chain)
-            for dex, pair_def, cache_dex, chain in active_requests
-        }
+        # Use a stable key per future so the worker can write its own timing
+        # into worker_timings without depending on the future object identity.
+        futures: dict[object, tuple] = {}
+        for dex, pair_def, cache_dex, chain in active_requests:
+            key = (id(dex), id(pair_def))
+            fut = self._pool.submit(_timed_fetch, dex, pair_def, key)
+            futures[fut] = (dex, pair_def, cache_dex, chain, key)
+
         # Hard 15s deadline on ALL RPC calls.  Added after production
         # incidents where web3.py eth_call ignored the HTTP timeout
         # (8s per request_kwargs) and blocked the entire thread pool
@@ -490,8 +540,15 @@ class OnChainMarket:
         # (Alchemy P99 ~2s), short enough to keep scan cadence <30s.
         # See commit 0d8e09b ("fix: 15s hard deadline with pool.shutdown").
         done, not_done = concurrent.futures.wait(futures, timeout=15)
+
+        # Collect per-quoter timings for the structured-log event below.
+        per_quoter: list[dict] = []
+
         for future in not_done:
-            dex, pair_def, cache_dex, chain = futures[future]
+            dex, pair_def, cache_dex, chain, key = futures[future]
+            # Worker still running — no recorded timing yet, mark as the
+            # global cap (15 000 ms) so it shows up correctly in stats.
+            elapsed_ms = worker_timings.get(key, 15000.0)
             _logger.warning("RPC timeout (15s): %s on %s for %s", dex.name, dex.chain, pair_def.pair_name)
             future.cancel()
             cache.mark_skip(
@@ -503,16 +560,28 @@ class OnChainMarket:
                 from observability.quote_diagnostics import QuoteOutcome
                 self.diagnostics.record(
                     dex.name, chain, pair_def.pair_name, QuoteOutcome.TIMEOUT,  # type: ignore[union-attr]
+                    latency_ms=elapsed_ms,
                 )
+            per_quoter.append({
+                "dex": dex.name, "chain": chain, "pair": pair_def.pair_name,  # type: ignore[union-attr]
+                "outcome": "timeout", "latency_ms": round(elapsed_ms, 1),
+            })
+
         for future in done:
-            dex, pair_def, cache_dex, chain = futures[future]
+            dex, pair_def, cache_dex, chain, key = futures[future]
+            elapsed_ms = worker_timings.get(key, 0.0)
             try:
                 quotes.append(future.result())
                 if self.diagnostics:
                     from observability.quote_diagnostics import QuoteOutcome
                     self.diagnostics.record(
                         dex.name, chain, pair_def.pair_name, QuoteOutcome.SUCCESS,  # type: ignore[union-attr]
+                        latency_ms=elapsed_ms,
                     )
+                per_quoter.append({
+                    "dex": dex.name, "chain": chain, "pair": pair_def.pair_name,  # type: ignore[union-attr]
+                    "outcome": "success", "latency_ms": round(elapsed_ms, 1),
+                })
             except Exception as exc:
                 _logger.warning(
                     "Skipping %s on %s for %s: %s",
@@ -535,7 +604,27 @@ class OnChainMarket:
                     self.diagnostics.record(
                         dex.name, chain, pair_def.pair_name, outcome,  # type: ignore[union-attr]
                         error_msg=str(exc)[:200],
+                        latency_ms=elapsed_ms,
                     )
+                per_quoter.append({
+                    "dex": dex.name, "chain": chain, "pair": pair_def.pair_name,  # type: ignore[union-attr]
+                    "outcome": ("zero" if "zero" in err_str else "error"),
+                    "latency_ms": round(elapsed_ms, 1),
+                })
+
+        # Structured per-scan event for offline latency analysis. Lives next
+        # to the existing scan_summary events in latency.jsonl. Lets us answer
+        # "which quoters drive p95/p99" without re-running the bot.
+        if per_quoter:
+            try:
+                from observability.latency_tracker import write_event
+                write_event({
+                    "event": "quoter_timings",
+                    "scan_size": len(per_quoter),
+                    "quoters": per_quoter,
+                })
+            except Exception:
+                pass  # diagnostics are best-effort; never block a scan
 
         return quotes
 
