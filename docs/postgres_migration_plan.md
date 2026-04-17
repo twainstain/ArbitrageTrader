@@ -121,7 +121,7 @@ Both are idempotent — re-runs are safe. Host script preserves the existing `DA
 ```yaml
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:17-alpine
     container_name: arb-postgres           # solana-postgres
     restart: unless-stopped
     environment:

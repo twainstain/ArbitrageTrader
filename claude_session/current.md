@@ -1,16 +1,16 @@
 # Current State
 
-## Session: 2026-04-14
+## Session: 2026-04-17
 
 ### Summary
 
-Production bot deployed on AWS EC2 with 22 DEX quoters implemented, dynamic pair discovery, thin pool detection. 618 tests. Fixed critical fee double-counting bug — on-chain quoters now surface real spreads (25-35 bps on major pairs).
+Migrated persistence off Neon onto self-hosted Postgres in Docker (Phase B of `docs/postgres_migration_plan.md`). Hit two issues on cutover and fixed both: (1) nginx 502s because bot container IP changed on recreate and nginx had cached the old one — fixed by `docker compose restart nginx`; (2) bot was flipped to an empty local pg *before* the Neon port ran, stranding ~1.7M scan_history + 864 opportunities on Neon. Ported via `scripts/port_neon_to_local.sh` after bumping local image from `postgres:16-alpine` → `postgres:17-alpine` (Neon runs 17, pg_dump 16 refused). Data recovered; no trade data was ever at risk (trade_results/execution_attempts were 0 on both sides).
 
 ### Deployed
 
 - **EC2**: 18.215.6.141 (spot t3.small)
 - **Dashboard**: https://arb-trader.yeda-ai.com/dashboard
-- **DB**: Neon Postgres
+- **DB**: self-hosted Postgres 17 (container `arb-postgres`, volume `arb-trader_pg-data`)
 - **Alerting**: Discord + Gmail
 
 ### What Works
@@ -46,5 +46,7 @@ Production bot deployed on AWS EC2 with 22 DEX quoters implemented, dynamic pair
 | **Base USDT not in token registry** | Missing USDT address for Base chain | Add to tokens.py |
 | **OP/USDC only works on Optimism** | Other chains can't resolve OP token | Expected — OP is Optimism-native |
 | **CI/CD deploy fails** | AWS credentials not set in GitHub secrets | Set AWS_ACCESS_KEY_ID/SECRET in repo settings |
+| **Hourly S3 backup cron not installed** | Phase B left off before Step 5 | Install cron entry from `docs/postgres_migration_plan.md` §5 + rehearse `restore_from_s3.sh` |
+| **Nginx DNS caching** | Static upstream `bot:8000` resolved once at startup — breaks on bot recreate | Harden with `resolver 127.0.0.11 valid=10s` + variable upstream in nginx.conf |
 
 ### Test Count: 618
