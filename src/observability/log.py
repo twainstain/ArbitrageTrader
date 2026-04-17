@@ -163,6 +163,44 @@ def log_execution(
     _data_logger().info(_json_dumps(record))
 
 
+def log_simulation(
+    logger: logging.Logger,
+    *,
+    opportunity: Opportunity | None,
+    chain: str,
+    contract_address: str,
+    success: bool,
+    panic_code: int | None = None,
+    panic_name: str | None = None,
+    revert_reason: str | None = None,
+    block_number: int | None = None,
+    sim_duration_ms: float | None = None,
+) -> None:
+    """Log an eth_call simulation result for later analysis.
+
+    Captures the full pricer-vs-reality picture so we can later reconstruct
+    why a sim failed: which pair/DEX combo, what the model expected, what the
+    on-chain contract said, on which block (replayable via fork). Written to
+    the structured JSONL sink alongside scan/execution events.
+    """
+    opp_dict = _opp_to_dict(opportunity) if opportunity is not None else None
+    record = {
+        "event": "simulation",
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "chain": chain,
+        "contract_address": contract_address,
+        "success": success,
+        "panic_code": panic_code,
+        "panic_name": panic_name,
+        # Truncate raw revert string — full payloads can be 1KB+ of provider noise.
+        "revert_reason": (revert_reason[:500] if revert_reason else None),
+        "block_number": block_number,
+        "sim_duration_ms": sim_duration_ms,
+        "opportunity": opp_dict,
+    }
+    _data_logger().info(_json_dumps(record))
+
+
 def log_swap_event(
     logger: logging.Logger,
     chain: str,

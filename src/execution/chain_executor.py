@@ -61,6 +61,7 @@ Usage::
 from __future__ import annotations
 
 import os
+import time
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -326,7 +327,7 @@ class ChainExecutor:
             tx_data = self._build_transaction(opportunity)
 
             # Step 1: Simulate via eth_call before spending gas.
-            sim_ok, sim_reason = self._simulate_transaction(tx_data)
+            sim_ok, sim_reason = self._simulate_transaction(tx_data, opportunity)
             if not sim_ok:
                 logger.warning("Simulation failed, skipping execution: %s", sim_reason)
                 return ExecutionResult(
@@ -386,13 +387,80 @@ class ChainExecutor:
         if self.rpc_provider is not None:
             self.rpc_provider.record_success()
 
-    def _simulate_transaction(self, tx_data: dict) -> tuple[bool, str]:
+    # Solidity Panic codes from EIP-838 (selector 0x4e487b71). When eth_call
+    # reverts with one of these, the contract hit a checked-math/runtime error
+    # rather than an explicit `require`. Decoding lets us distinguish a
+    # genuinely-unprofitable trade (0x11 underflow on `output - flashLoanRepay`)
+    # from a real bug (0x32 array OOB, 0x21 invalid enum, etc.).
+    _PANIC_CODES = {
+        0x00: "generic_panic",
+        0x01: "assertion_failed",
+        0x11: "arithmetic_underflow_or_overflow",
+        0x12: "division_by_zero",
+        0x21: "enum_conversion_invalid",
+        0x22: "storage_byte_array_invalid",
+        0x31: "pop_on_empty_array",
+        0x32: "array_out_of_bounds",
+        0x41: "alloc_too_large_or_oom",
+        0x51: "uninitialized_function_call",
+    }
+
+    @staticmethod
+    def _decode_panic(reason: str) -> tuple[int | None, str | None]:
+        """If the revert payload is a Solidity Panic(uint256), return
+        (code, name). Otherwise (None, None)."""
+        marker = "0x4e487b71"
+        idx = reason.find(marker)
+        if idx < 0:
+            return None, None
+        tail = reason[idx + len(marker):]
+        hex_chars = "".join(c for c in tail if c in "0123456789abcdefABCDEF")
+        if len(hex_chars) < 2:
+            return None, None
+        try:
+            code = int(hex_chars[-2:], 16)
+        except ValueError:
+            return None, None
+        return code, ChainExecutor._PANIC_CODES.get(code, f"unknown_panic_0x{code:02x}")
+
+    def _simulate_transaction(self, tx_data: dict, opportunity: Opportunity | None = None) -> tuple[bool, str]:
         """Simulate the transaction via eth_call (no gas spent).
 
         Returns (True, "ok") if simulation succeeds, or (False, reason) if it
         would revert.  This catches: insufficient profit, bad routes, token
         approval issues, etc. before real gas is spent.
+
+        Every simulation — success or revert — emits a structured JSONL event
+        via log_simulation() carrying: opportunity snapshot (pair/dex/spread/
+        liquidity/expected profit), block number for fork-replay, panic code +
+        decoded name on revert, and sim duration. This lets us later analyse
+        why pricer estimates diverge from on-chain reality without re-running
+        the bot.
         """
+        from observability.log import log_simulation as _log_sim
+        sim_start = time.monotonic()
+        block_number: int | None = None
+        try:
+            bn = self.w3.eth.block_number
+            block_number = int(bn) if isinstance(bn, int) else None
+        except Exception:
+            block_number = None
+
+        def _emit(success: bool, panic_code: int | None = None,
+                  panic_name: str | None = None, revert_reason: str | None = None) -> None:
+            _log_sim(
+                logger,
+                opportunity=opportunity,
+                chain=self.chain,
+                contract_address=self.contract_address,
+                success=success,
+                panic_code=panic_code,
+                panic_name=panic_name,
+                revert_reason=revert_reason,
+                block_number=block_number,
+                sim_duration_ms=(time.monotonic() - sim_start) * 1000.0,
+            )
+
         try:
             self.w3.eth.call({
                 "from": tx_data["from"],
@@ -401,18 +469,35 @@ class ChainExecutor:
                 "value": tx_data.get("value", 0),
             })
             self._record_rpc_success()
+            _emit(success=True)
             return True, "ok"
         except ConnectionError:
             # RPC connection failed — rotate and report.
             self._record_rpc_error()
+            _emit(success=False, revert_reason="rpc_connection_error")
             return False, "rpc_connection_error"
         except Exception as exc:
-            # Extract revert reason if available.
             # Contract reverts are NOT RPC errors — the call reached the node.
             self._record_rpc_success()
             reason = str(exc)
+            panic_code, panic_name = self._decode_panic(reason)
+            if panic_name is not None:
+                expected = (
+                    f"{opportunity.net_profit_base:.6f}" if opportunity is not None else "unknown"
+                )
+                pair = opportunity.pair if opportunity is not None else "unknown"
+                logger.warning(
+                    "[sim_revert] panic=%s pair=%s chain=%s expected_net=%s ETH block=%s "
+                    "→ on-chain says trade is unprofitable; pricer over-estimated",
+                    panic_name, pair, self.chain, expected, block_number,
+                )
+                _emit(success=False, panic_code=panic_code,
+                      panic_name=panic_name, revert_reason=reason)
+                return False, f"panic:{panic_name}"
             if "profit below minimum" in reason.lower():
+                _emit(success=False, revert_reason="profit_below_minimum")
                 return False, "profit_below_minimum"
+            _emit(success=False, revert_reason=reason)
             return False, reason
 
     def _build_transaction(self, opportunity: Opportunity) -> dict:

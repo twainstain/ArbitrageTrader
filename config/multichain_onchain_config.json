@@ -3,19 +3,19 @@
   "base_asset": "WETH",
   "quote_asset": "USDC",
   "trade_size": 1.0,
-  "min_profit_base": 0.0001,
+  "min_profit_base": 0.005,
   "estimated_gas_cost_base": 0.001,
   "chain_gas_cost": {
-    "ethereum": 0.005,
-    "arbitrum": 0.0002,
-    "optimism": 0.0001,
-    "base": 0.0001,
-    "polygon": 0.0003,
-    "avax": 0.0003
+    "ethereum": 0.008,
+    "arbitrum": 0.0005,
+    "optimism": 0.0003,
+    "base": 0.0003,
+    "polygon": 0.0005,
+    "avax": 0.0005
   },
   "flash_loan_fee_bps": 9.0,
   "flash_loan_provider": "aave_v3",
-  "slippage_bps": 10.0,
+  "slippage_bps": 20.0,
   "poll_interval_seconds": 15.0,
   "chain_execution_mode": {
     "arbitrum": "live",
