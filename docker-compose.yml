@@ -1,6 +1,27 @@
 version: "3.8"
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: arb-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-arbitrage}
+      POSTGRES_USER: ${POSTGRES_USER:-arb}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    # Access via SSH tunnel — do not expose 5432 to the host without a
+    # locked-down security group. Never run `docker compose down -v`; it
+    # destroys the pg-data volume.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-arb} -d ${POSTGRES_DB:-arbitrage}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - arb-net
+
   bot:
     image: ${ECR_REGISTRY:-local}/arb-trader:${IMAGE_TAG:-latest}
     build: .
@@ -13,7 +34,10 @@ services:
       - ./logs:/app/logs
       - ./data:/app/data
     depends_on:
-      - loki
+      postgres:
+        condition: service_healthy
+      loki:
+        condition: service_started
     networks:
       - arb-net
 
@@ -98,6 +122,7 @@ volumes:
   prometheus-data:
   grafana-data:
   loki-data:
+  pg-data:
 
 networks:
   arb-net:
