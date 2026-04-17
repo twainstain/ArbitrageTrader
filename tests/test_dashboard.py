@@ -448,9 +448,9 @@ class ProfitAggregationTests(_DashboardTestBase):
     def test_dashboard_html_contains_profit_labels(self):
         resp = self.client.get("/dashboard")
         self.assertIn("Execution PnL", resp.text)
-        self.assertIn("Expected Profit", resp.text)
-        self.assertIn("Avg Profit", resp.text)
+        self.assertIn("Avg Expected Profit", resp.text)
         self.assertIn("Best Single Opp", resp.text)
+        self.assertIn("Realized Profit", resp.text)
 
     def test_profit_in_custom_range(self):
         self._seed_with_pricing()

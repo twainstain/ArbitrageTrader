@@ -68,6 +68,14 @@ class ArbitrageStrategy:
         for pair_cfg in pairs or config.extra_pairs or []:
             self._pair_configs[pair_cfg.pair] = pair_cfg
 
+    # Sanity bounds for a WETH/USDC (or USDT) price. A quoter returning a
+    # value outside this range is broken or stale (seen in production:
+    # Sushi-Base returning $13, Uniswap-Avax returning $1638 for WETH/USDT).
+    # Including such quotes in the median poisons _weth_price_usd and inflates
+    # ETH-denominated profits by orders of magnitude for non-WETH-base pairs.
+    _MIN_SANE_ETH_USD = Decimal("100")
+    _MAX_SANE_ETH_USD = Decimal("50000")
+
     def update_weth_price(self, quotes: list[MarketQuote]) -> None:
         """Update the reference WETH price from WETH/USDC or WETH/USDT quotes.
 
@@ -76,7 +84,10 @@ class ArbitrageStrategy:
         """
         prices: list[Decimal] = []
         for q in quotes:
-            if q.pair in ("WETH/USDC", "WETH/USDT") and q.buy_price > ZERO:
+            if (
+                q.pair in ("WETH/USDC", "WETH/USDT")
+                and self._MIN_SANE_ETH_USD <= q.buy_price <= self._MAX_SANE_ETH_USD
+            ):
                 prices.append(q.buy_price)
         if prices:
             prices.sort()
@@ -237,13 +248,15 @@ class ArbitrageStrategy:
             # the reference WETH price from the current scan cycle.
             net_profit_base = (net_profit_quote / self._weth_price_usd) - chain_gas
         else:
-            # Fallback: no WETH reference available, use pair mid-price.
-            # This is wrong for non-WETH pairs but better than crashing.
-            logger.warning(
-                "[strategy] No WETH reference price for %s — profit may be inaccurate",
+            # Non-WETH base pair with no usable WETH reference. Falling back to
+            # the pair mid-price gives wrong units (profit in OP or AERO, not
+            # ETH) and has inflated dashboard totals by 4+ orders of magnitude
+            # in prod. Refuse to price rather than emit a bogus opportunity.
+            logger.debug(
+                "[strategy] %s: no sane WETH reference — skipping non-WETH-base pair",
                 buy_quote.pair,
             )
-            net_profit_base = (net_profit_quote / mid_price) - chain_gas
+            return None
 
         is_actionable = net_profit_base > self.config.min_profit_base
         if not is_actionable:

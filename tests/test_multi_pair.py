@@ -209,6 +209,10 @@ class StrategyWithMultiPairQuotesTests(unittest.TestCase):
 
         from core.models import MarketQuote
         quotes = [
+            # Provide a WETH reference so the non-WETH-base WBTC/USDC pair can
+            # normalise its profit to ETH — without this the strategy now
+            # refuses to price non-WETH-base pairs.
+            MarketQuote(dex="W", pair="WETH/USDC", buy_price=2300.0, sell_price=2299.0, fee_bps=0.0),
             MarketQuote(dex="A", pair="WBTC/USDC", buy_price=70000.0, sell_price=69900.0, fee_bps=0.0),
             MarketQuote(dex="B", pair="WBTC/USDC", buy_price=70600.0, sell_price=70500.0, fee_bps=0.0),
         ]

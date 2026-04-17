@@ -180,8 +180,11 @@ class OPUSDCProfitNormalisationTests(unittest.TestCase):
         self.assertGreater(float(opp.net_profit_base), 0.01)
         self.assertLess(float(opp.net_profit_base), 0.05)
 
-    def test_no_weth_reference_falls_back(self):
-        """Without WETH quotes, non-WETH pairs should still produce a result."""
+    def test_no_weth_reference_skips_non_weth_base(self):
+        """Without a WETH reference, non-WETH-base pairs must skip pricing —
+        the previous fallback used pair mid-price as the ETH conversion,
+        which produced profit values in the wrong units and inflated
+        dashboard totals by 4+ orders of magnitude in production."""
         op_pair = PairConfig(
             pair="OP/USDC", base_asset="OP", quote_asset="USDC",
             trade_size=D("20000"), max_exposure=D("25000"),
@@ -195,8 +198,7 @@ class OPUSDCProfitNormalisationTests(unittest.TestCase):
                            buy_price=1.53, sell_price=1.5225, fee_bps=0.0)
 
         opp = strategy.evaluate_pair(buy, sell)
-        # Should still return something (falls back to mid_price division).
-        self.assertIsNotNone(opp)
+        self.assertIsNone(opp)
 
 
 # ---------------------------------------------------------------------------

@@ -243,11 +243,6 @@ OPS_DASHBOARD_HTML = """<!DOCTYPE html>
                 <div class="card-value ${Number(pnl.total_profit || 0) > 0 ? 'status-ok' : Number(pnl.total_profit || 0) < 0 ? 'status-bad' : ''}">${Number(pnl.total_profit || 0).toFixed(6)} ETH</div>
                 <div class="card-sub">${pnl.successful || 0} included / ${pnl.reverted || 0} reverted / ${pnl.not_included || 0} not included</div>
             </div>
-            <div class="card">
-                <div class="card-title">Total Expected Profit</div>
-                <div class="card-value ${m.total_expected_profit > 0 ? 'status-ok' : ''}">${Number(m.total_expected_profit).toFixed(6)} ETH</div>
-                <div class="card-sub">~$${(m.total_expected_profit * 2300).toFixed(2)}</div>
-            </div>
         `;
     }
 

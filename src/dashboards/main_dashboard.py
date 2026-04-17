@@ -387,7 +387,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const o = data.opportunities || {};
         const t = data.trades || {};
         const p = data.profit || {};
-        const totalExpected = Number(p.total_expected_profit || 0);
         const avgExpected = Number(p.avg_expected_profit || 0);
         const maxExpected = Number(p.max_expected_profit || 0);
         const profitCount = p.priced_count || 0;
@@ -395,10 +394,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const tradeCount = t.total_trades || 0;
         const hasRealTrades = tradeCount > 0;
 
-        // Show realized profit when we have actual trades, expected otherwise
-        const mainProfit = hasRealTrades ? totalRealized : totalExpected;
-        const mainLabel = hasRealTrades ? 'Realized Profit' : 'Expected Profit';
-        const mainClass = mainProfit > 0 ? 'status-ok' : mainProfit < 0 ? 'status-bad' : '';
+        // Realized profit is a legit sum (one row per executed trade). Expected
+        // profit is NOT summable — every scan produces a new pricing_results
+        // row for the same pair, so SUM inflates by the number of scans in the
+        // window (was showing ~1400 ETH over 24h in prod). Show best + avg
+        // instead; "Expected Profit" label reserved for if we re-introduce a
+        // meaningful aggregate later.
+        const realizedClass = totalRealized > 0 ? 'status-ok' : totalRealized < 0 ? 'status-bad' : '';
 
         grid.innerHTML = `
             <div class="card">
@@ -406,15 +408,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <div class="card-value">${o.total || 0}</div>
                 <div class="card-sub">${profitCount} profitable</div>
             </div>
+            ${hasRealTrades ? `
             <div class="card">
-                <div class="card-title">${mainLabel} (${currentWindow})</div>
-                <div class="card-value ${mainClass}">${mainProfit.toFixed(6)} ETH</div>
-                <div class="card-sub">~$${(mainProfit * 2300).toFixed(2)}</div>
-            </div>
+                <div class="card-title">Realized Profit (${currentWindow})</div>
+                <div class="card-value ${realizedClass}">${totalRealized.toFixed(6)} ETH</div>
+                <div class="card-sub">~$${(totalRealized * 2300).toFixed(2)}</div>
+            </div>` : ''}
             <div class="card">
-                <div class="card-title">Avg Profit / Opp (${currentWindow})</div>
+                <div class="card-title">Avg Expected Profit / Opp (${currentWindow})</div>
                 <div class="card-value">${avgExpected.toFixed(6)} ETH</div>
-                <div class="card-sub">~$${(avgExpected * 2300).toFixed(2)}</div>
+                <div class="card-sub">~$${(avgExpected * 2300).toFixed(2)} across ${profitCount} priced</div>
             </div>
             <div class="card">
                 <div class="card-title">Best Single Opp (${currentWindow})</div>
@@ -426,12 +429,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
                 <div class="card-value">${tradeCount}</div>
                 <div class="card-sub">${t.successful || 0} ok / ${t.reverted || 0} reverted</div>
             </div>
-            ${hasRealTrades ? `
-            <div class="card">
-                <div class="card-title">Expected vs Realized</div>
-                <div class="card-value">${((totalRealized / (totalExpected || 1)) * 100).toFixed(1)}%</div>
-                <div class="card-sub">Expected: ${totalExpected.toFixed(6)} | Realized: ${totalRealized.toFixed(6)}</div>
-            </div>` : `
+            ${hasRealTrades ? '' : `
             <div class="card">
                 <div class="card-title">Mode</div>
                 <div class="card-value status-warn">SIMULATION</div>
