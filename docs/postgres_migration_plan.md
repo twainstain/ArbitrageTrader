@@ -101,6 +101,21 @@ If solana-trader currently uses Neon Postgres already, no code change is needed 
 
 All paths below are for ArbitrageTrader. For solana-trader, swap the parameters from §2.
 
+**Shortcut**: Phase A has two automation scripts that wrap the manual steps below. Use these if you're deploying fresh or doing the Solana bot — the raw steps are kept for reference / understanding.
+
+```bash
+# Run once, from laptop (admin AWS creds required):
+./scripts/phase_a_admin.sh                         # defaults to ArbitrageTrader
+./scripts/phase_a_admin.sh --role solana-ec2-role --policy-name SolanaArbS3Backup --prefix postgres/solana/
+
+# Run once, on the bot host (EC2):
+cd /opt/arb-trader
+./scripts/phase_a_host.sh                          # auto-detects source DB URL from .env
+./scripts/phase_a_host.sh --database-url-file /tmp/neon_url.txt   # or pass explicitly
+```
+
+Both are idempotent — re-runs are safe. Host script preserves the existing `DATABASE_URL` so the bot stays on its current DB (Neon) through Phase B.
+
 ### Step 1 — Add Postgres service to `docker-compose.yml`
 
 ```yaml
