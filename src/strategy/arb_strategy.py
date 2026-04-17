@@ -33,22 +33,38 @@ def _dynamic_slippage_bps(
     liquidity_usd: Decimal,
     base_slippage_bps: Decimal,
 ) -> Decimal:
-    """Compute slippage as a function of trade size relative to pool liquidity.
+    """Constant-product price-impact model for a single-pool swap.
 
-    For deep pools, slippage is close to the configured base.
-    For thin pools, slippage scales up proportionally.
+    For an x*y=k AMM, swapping amount ``dx`` into a pool with reserve
+    ``x`` yields ``dy = y * dx / (x + dx)``. The price impact (shortfall
+    vs the no-impact quote) is:
 
-    Formula: slippage = base_slippage * (1 + trade_size / liquidity)
+        impact_fraction = dx / (x + dx)
 
-    Example:
-      - $3000 trade in $50M pool → ~base_slippage (negligible extra)
-      - $3000 trade in $50K pool → ~2x base_slippage (significant impact)
+    ``liquidity_usd`` here is the TVL (≈ 2x the value-side reserve for a
+    50/50 pool), so we take ``x`` ≈ liquidity_usd / 2 as the relevant
+    single-side reserve. This gives:
+
+        impact_fraction ≈ (2 * trade_size_usd) / (liquidity_usd + 2 * trade_size_usd)
+
+    Applied as ``impact_bps = impact_fraction * 10000`` plus a floor of
+    ``base_slippage_bps`` to cover oracle/jitter even in deep pools.
+
+    Seen in prod (opp_5803d1980637): a $3500 trade in a $279K pool. The
+    previous linear model charged ~20 bps slippage; reality was ~250 bps
+    of price impact. The contract sim underflowed because actual output
+    was below the flash-loan repayment. Constant-product model correctly
+    predicts ~248 bps for this scenario and would filter the opp out at
+    the risk stage before sim cost is spent.
     """
     if liquidity_usd <= ZERO:
-        # No liquidity data — fall back to base slippage.
-        return base_slippage_bps
-    impact_ratio = trade_size_usd / liquidity_usd
-    return base_slippage_bps * (ONE + impact_ratio)
+        # No liquidity data — be conservative, not optimistic.
+        return base_slippage_bps * D("4")
+    two = D("2")
+    effective_reserve = liquidity_usd + two * trade_size_usd
+    impact_fraction = (two * trade_size_usd) / effective_reserve
+    impact_bps = impact_fraction * BPS_DIVISOR
+    return max(base_slippage_bps, impact_bps)
 
 
 class ArbitrageStrategy:
@@ -96,6 +112,48 @@ class ArbitrageStrategy:
     @staticmethod
     def _is_eth_base(symbol: str) -> bool:
         return symbol.upper() in ("WETH", "ETH")
+
+    # Max fraction of the THINNER pool the trade is allowed to consume.
+    # 0.001 (10 bps of TVL) keeps constant-product impact at the same bps
+    # regardless of absolute pool size, so the modelled slippage stays
+    # realistic. Above this, real on-chain impact overwhelms any spread
+    # we measured in the quote (prod opp_5803d1980637: $3500 trade in
+    # $279K pool = 1.25% of TVL → 250 bps real impact vs 42 bps spread).
+    _MAX_TRADE_FRACTION_OF_TVL = Decimal("0.001")
+
+    def _clamp_trade_size_to_liquidity(
+        self,
+        configured_size: Decimal,
+        buy_quote: MarketQuote,
+        sell_quote: MarketQuote,
+    ) -> Decimal:
+        """Return a trade size that won't blow up price impact.
+
+        Uses min(buy_liq, sell_liq) * _MAX_TRADE_FRACTION_OF_TVL as the
+        USD cap, then converts to base-asset units. Falls back to the
+        configured size if either pool reports zero liquidity (we have no
+        signal to clamp on). Never INCREASES the configured size.
+        """
+        min_liq = min(buy_quote.liquidity_usd, sell_quote.liquidity_usd)
+        if min_liq <= ZERO:
+            return configured_size
+        max_usd = min_liq * self._MAX_TRADE_FRACTION_OF_TVL
+        # Need to convert USD cap to base-asset units. Buy price is in
+        # quote-per-base (e.g. USDC per WETH). If quote is USD-pegged
+        # (USDC/USDT) the buy_price ≈ price-in-USD. For non-USD quote
+        # pairs (X/WETH) we don't have a clean USD mapping here, so
+        # skip the clamp for those — the separate WETH-reference logic
+        # in evaluate_pair handles their sizing.
+        if buy_quote.buy_price <= ZERO:
+            return configured_size
+        max_base_units = max_usd / buy_quote.buy_price
+        if max_base_units < configured_size:
+            logger.info(
+                "[strategy] Trade size clamped: %s liq_min=$%.0f → size %s → %s",
+                buy_quote.pair, min_liq, configured_size, max_base_units,
+            )
+            return max_base_units
+        return configured_size
 
     def find_best_opportunity(self, quotes: list[MarketQuote]) -> Opportunity | None:
         """Return the most profitable cross-DEX opportunity, or None if nothing is actionable."""
@@ -164,7 +222,9 @@ class ArbitrageStrategy:
                 trade_size=self.config.trade_size,
             ),
         )
-        trade_size = pair_cfg.trade_size
+        trade_size = self._clamp_trade_size_to_liquidity(
+            pair_cfg.trade_size, buy_quote, sell_quote,
+        )
         buy_cost_quote = trade_size * buy_quote.buy_price
         sell_proceeds_quote = trade_size * sell_quote.sell_price
 
@@ -255,6 +315,23 @@ class ArbitrageStrategy:
             logger.debug(
                 "[strategy] %s: no sane WETH reference — skipping non-WETH-base pair",
                 buy_quote.pair,
+            )
+            return None
+
+        # Guard: reject trades that would LOSE money after all friction,
+        # independent of the min_profit threshold. The contract-level sim
+        # catches this too, but filtering here saves an RPC roundtrip and
+        # keeps the funnel clean.
+        total_friction_quote = (
+            (buy_cost_with_fee - buy_cost_quote)          # buy-side DEX fee
+            + (sell_proceeds_quote - sell_proceeds_after_fee)  # sell-side DEX fee
+            + slippage_cost_quote
+            + flash_fee_quote
+        )
+        if gross_profit_quote < total_friction_quote:
+            logger.info(
+                "[strategy] %s reject: gross=%.4f < friction=%.4f (fees+flash+slip) SKIP",
+                buy_quote.pair, float(gross_profit_quote), float(total_friction_quote),
             )
             return None
 

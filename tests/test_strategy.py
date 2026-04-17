@@ -293,34 +293,46 @@ class DynamicSlippageTests(unittest.TestCase):
         # slippage_cost should be very close to base: 3001 * 15/10000 ≈ 4.5
         self.assertAlmostEqual(float(opp_deep.slippage_cost_quote), 4.5015, delta=0.1)
 
-    def test_thin_pool_has_higher_slippage(self) -> None:
-        """With $50K liquidity, slippage should be significantly higher."""
+    def test_thin_pool_clamps_trade_size(self) -> None:
+        """Thin pools now protect us by clamping the trade size to a small
+        fraction of TVL (constant-product + trade-size clamp replaces the
+        old linear-slippage penalty). The absolute slippage_cost_quote on
+        a thin pool can end up LOWER than on a deep pool because the
+        clamped trade is tiny — that's the point."""
         config = self._make_zero_cost_config(slippage_bps=15.0)
         strategy = ArbitrageStrategy(config)
 
-        # Deep pool quotes
         deep_quotes = [
             MarketQuote(dex="A", pair="WETH/USDC", buy_price=3001.0, sell_price=2999.0,
                         fee_bps=0.0, liquidity_usd=50_000_000),
             MarketQuote(dex="B", pair="WETH/USDC", buy_price=3081.0, sell_price=3079.0,
                         fee_bps=0.0, liquidity_usd=50_000_000),
         ]
-
-        # Thin pool quotes (same prices, less liquidity)
         thin_quotes = [
             MarketQuote(dex="A", pair="WETH/USDC", buy_price=3001.0, sell_price=2999.0,
                         fee_bps=0.0, liquidity_usd=50_000),
             MarketQuote(dex="B", pair="WETH/USDC", buy_price=3081.0, sell_price=3079.0,
                         fee_bps=0.0, liquidity_usd=50_000),
         ]
-
         opp_deep = strategy.find_best_opportunity(deep_quotes)
         opp_thin = strategy.find_best_opportunity(thin_quotes)
+        assert opp_deep is not None and opp_thin is not None
 
-        assert opp_deep is not None
-        assert opp_thin is not None
-        # Thin pool should have higher slippage cost.
-        self.assertGreater(opp_thin.slippage_cost_quote, opp_deep.slippage_cost_quote)
+        # Deep pool uses the full configured trade size; thin pool is clamped.
+        self.assertAlmostEqual(float(opp_deep.trade_size), 1.0, places=6)
+        self.assertLess(float(opp_thin.trade_size), 0.1)
+
+    def test_slippage_bps_scales_with_pool_fraction(self) -> None:
+        """Pure constant-product check on _dynamic_slippage_bps — at
+        1.25% of TVL, impact should be ~248 bps, matching the real prod
+        failure mode (opp_5803d1980637: $3500 in $279K pool)."""
+        from strategy.arb_strategy import _dynamic_slippage_bps
+        from decimal import Decimal as _D
+        bps = _dynamic_slippage_bps(_D("3500"), _D("280000"), _D("15"))
+        # impact_fraction = 2*3500 / (280000 + 7000) = 7000/287000 ≈ 0.02439
+        # → 243.9 bps, well above the 15 bps base floor.
+        self.assertGreater(float(bps), 200)
+        self.assertLess(float(bps), 300)
 
     def test_no_liquidity_data_uses_base_slippage(self) -> None:
         """When liquidity_usd is 0 (default), should use flat base slippage."""
