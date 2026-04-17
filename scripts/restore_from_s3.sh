@@ -28,7 +28,7 @@ rm "$TMP"
 
 echo "==> Post-restore row counts:"
 docker exec "$CONTAINER" psql -U "$USER" -d "$DB" -c "
-  SELECT schemaname, tablename, n_live_tup
-  FROM pg_stat_user_tables ORDER BY tablename;
+  SELECT schemaname, relname AS tablename, n_live_tup
+  FROM pg_stat_user_tables ORDER BY relname;
 "
 echo "==> Restored $KEY"

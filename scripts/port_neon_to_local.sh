@@ -23,8 +23,8 @@ fi
 
 echo "==> Source row counts (Neon):"
 docker exec -i "$CONTAINER" psql "$NEON_URL" -c "
-  SELECT schemaname, tablename, n_live_tup
-  FROM pg_stat_user_tables ORDER BY tablename;
+  SELECT schemaname, relname AS tablename, n_live_tup
+  FROM pg_stat_user_tables ORDER BY relname;
 "
 
 echo "==> Dumping Neon → container:/tmp/import.dump"
@@ -37,8 +37,8 @@ docker exec "$CONTAINER" pg_restore \
 
 echo "==> Post-restore row counts (local):"
 docker exec "$CONTAINER" psql -U "$LOCAL_USER" -d "$LOCAL_DB" -c "
-  SELECT schemaname, tablename, n_live_tup
-  FROM pg_stat_user_tables ORDER BY tablename;
+  SELECT schemaname, relname AS tablename, n_live_tup
+  FROM pg_stat_user_tables ORDER BY relname;
 "
 
 docker exec "$CONTAINER" rm -f /tmp/import.dump
